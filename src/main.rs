@@ -86,6 +86,133 @@ impl BumpAllocator {
 
 static mut HEAP_ALLOCATOR: BumpAllocator = BumpAllocator::new();
 
+/// Interrupt Descriptor Table Entry
+#[derive(Clone, Copy)]
+#[repr(C, packed)]
+struct IdtEntry {
+    offset_low: u16,
+    selector: u16,
+    ist: u8,
+    type_attr: u8,
+    offset_mid: u16,
+    offset_high: u32,
+    zero: u32,
+}
+
+impl IdtEntry {
+    const fn new() -> Self {
+        IdtEntry {
+            offset_low: 0,
+            selector: 0,
+            ist: 0,
+            type_attr: 0,
+            offset_mid: 0,
+            offset_high: 0,
+            zero: 0,
+        }
+    }
+
+    fn set_handler(&mut self, handler: unsafe extern "C" fn()) {
+        let addr = handler as usize;
+        self.offset_low = addr as u16;
+        self.offset_mid = (addr >> 16) as u16;
+        self.offset_high = (addr >> 32) as u32;
+        self.selector = 0x08; // Code segment selector
+        self.type_attr = 0x8E; // Present, ring 0, interrupt gate
+        self.ist = 0;
+        self.zero = 0;
+    }
+}
+
+/// Interrupt Descriptor Table
+#[repr(C, packed)]
+struct Idt {
+    entries: [IdtEntry; 256],
+}
+
+impl Idt {
+    const fn new() -> Self {
+        Idt {
+            entries: [IdtEntry::new(); 256],
+        }
+    }
+
+    fn set_handler(&mut self, index: usize, handler: unsafe extern "C" fn()) {
+        self.entries[index].set_handler(handler);
+    }
+}
+
+/// IDT Pointer for lidt instruction
+#[repr(C, packed)]
+struct IdtPtr {
+    limit: u16,
+    base: u64,
+}
+
+static mut IDT: Idt = Idt::new();
+
+/// Basic interrupt handlers
+unsafe extern "C" fn divide_by_zero_handler() {
+    // For now, just halt on divide by zero
+    loop {
+        core::arch::asm!("hlt");
+    }
+}
+
+unsafe extern "C" fn breakpoint_handler() {
+    // For now, just continue on breakpoint
+}
+
+unsafe extern "C" fn timer_handler() {
+    // Timer interrupt - could be used for AI processing scheduling
+}
+
+unsafe extern "C" fn keyboard_handler() {
+    // Keyboard interrupt - could be used for AI input
+}
+
+/// Load the IDT
+unsafe fn load_idt() {
+    let idt_ptr = IdtPtr {
+        limit: (core::mem::size_of::<Idt>() - 1) as u16,
+        base: core::ptr::addr_of!(IDT) as u64,
+    };
+
+    core::arch::asm!("lidt [{}]", in(reg) &idt_ptr);
+}
+
+/// Initialize interrupts
+unsafe fn init_interrupts() {
+    // Set up basic interrupt handlers
+    (*core::ptr::addr_of_mut!(IDT)).set_handler(0, divide_by_zero_handler);    // Divide by zero
+    (*core::ptr::addr_of_mut!(IDT)).set_handler(3, breakpoint_handler);        // Breakpoint
+    (*core::ptr::addr_of_mut!(IDT)).set_handler(32, timer_handler);           // Timer (PIC offset)
+    (*core::ptr::addr_of_mut!(IDT)).set_handler(33, keyboard_handler);        // Keyboard (PIC offset)
+
+    // Load the IDT
+    load_idt();
+
+    // Remap PIC (Programmable Interrupt Controller)
+    // Master PIC
+    core::arch::asm!("out 0x20, al", in("al") 0x11u8); // ICW1: Initialize
+    core::arch::asm!("out 0x21, al", in("al") 0x20u8); // ICW2: Interrupt vector offset
+    core::arch::asm!("out 0x21, al", in("al") 0x04u8); // ICW3: Slave PIC at IRQ2
+    core::arch::asm!("out 0x21, al", in("al") 0x01u8); // ICW4: 8086 mode
+
+    // Slave PIC
+    core::arch::asm!("out 0xA0, al", in("al") 0x11u8); // ICW1: Initialize
+    core::arch::asm!("out 0xA1, al", in("al") 0x28u8); // ICW2: Interrupt vector offset
+    core::arch::asm!("out 0xA1, al", in("al") 0x02u8); // ICW3: Slave PIC identity
+    core::arch::asm!("out 0xA1, al", in("al") 0x01u8); // ICW4: 8086 mode
+
+    // Mask all interrupts except timer and keyboard for now
+    core::arch::asm!("out 0x21, al", in("al") 0xFCu8); // Master: Enable timer (IRQ0) and keyboard (IRQ1)
+    core::arch::asm!("out 0xA1, al", in("al") 0xFFu8); // Slave: Disable all
+
+    // Enable interrupts
+    core::arch::asm!("sti");
+}
+
 #[entry]
 fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     uefi_services::init(&mut system_table).unwrap();
@@ -165,6 +292,11 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
         setup_paging();
     }
 
+    // Initialize interrupts for kernel responsiveness
+    unsafe {
+        init_interrupts();
+    }
+
     // Write paging setup complete message
     let paging_msg = b"Paging enabled! Memory management active.";
     unsafe {
@@ -172,6 +304,17 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
             if i < VGA_WIDTH {
                 let char = (byte as u16) | 0x0A00; // Green on black
                 VGA_BUFFER.add(VGA_WIDTH + i).write_volatile(char); // Second line
+            }
+        }
+    }
+
+    // Write interrupts enabled message
+    let interrupt_msg = b"Interrupts enabled! Kernel is responsive.";
+    unsafe {
+        for (i, &byte) in interrupt_msg.iter().enumerate() {
+            if i < VGA_WIDTH {
+                let char = (byte as u16) | 0x0900; // Blue on black
+                VGA_BUFFER.add(VGA_WIDTH * 4 + i).write_volatile(char); // Fifth line
             }
         }
     }
