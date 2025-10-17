@@ -55,7 +55,6 @@ unsafe fn setup_paging() {
 
 /// Simple bump allocator for kernel heap
 struct BumpAllocator {
-    heap_start: usize,
     heap_end: usize,
     next: usize,
 }
@@ -67,7 +66,6 @@ impl BumpAllocator {
         const HEAP_SIZE: usize = 0x100000; // 1MB heap
 
         BumpAllocator {
-            heap_start: HEAP_START,
             heap_end: HEAP_START + HEAP_SIZE,
             next: HEAP_START,
         }
@@ -111,10 +109,10 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     // Store memory map information for kernel use
     let mut total_memory_kb = 0u64;
     let mut usable_memory_kb = 0u64;
-    let mut memory_entries = 0;
+    let mut _memory_entries = 0;
 
     for entry in memory_map.entries() {
-        memory_entries += 1;
+        _memory_entries += 1;
         let size_kb = (entry.page_count * 4096) / 1024;
         total_memory_kb += size_kb;
 
@@ -200,7 +198,7 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     unsafe {
         // Convert numbers to strings manually (no std format!)
         let total_mb = total_memory_kb / 1024;
-        let usable_mb = usable_memory_kb / 1024;
+        let _usable_mb = usable_memory_kb / 1024;
 
         // Simple memory info display
         let mem_msg = b"Memory: ";
