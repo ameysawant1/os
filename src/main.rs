@@ -10,15 +10,20 @@ fn main(_image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
 
     println!("Hello from Rust UEFI OS!");
     println!("Bootloader initialized successfully.");
-
-    // Simple kernel-like functionality
     println!("Kernel starting...");
 
-    // For now, just loop forever
+    let mut counter = 0;
+
+    // Simple kernel-like functionality
     loop {
-        // In a real kernel, we'd have scheduling, interrupts, etc.
-        // For demo purposes, we'll just print a message periodically
-        println!("OS running...");
+        counter += 1;
+        println!("OS running... (iteration {})", counter);
+
+        // Every 10 iterations, show some system info
+        if counter % 10 == 0 {
+            println!("System uptime: {} seconds", counter);
+            println!("Memory status: Available");
+        }
 
         // Wait for 1 second
         system_table.boot_services().stall(1_000_000);
