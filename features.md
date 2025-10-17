@@ -1,4 +1,4 @@
-# OS Features
+# OS with ai
 
 ## Currently Implemented ✅
 
@@ -26,6 +26,13 @@
   - Page table setup and CR3/CR0 configuration
   - Memory allocation testing and validation
   - UEFI memory map processing and statistics display
+
+- **Interrupt Handling**
+  - Interrupt Descriptor Table (IDT) with 256 entries
+  - Basic interrupt handlers (divide by zero, breakpoint, timer, keyboard)
+  - PIC (Programmable Interrupt Controller) configuration and remapping
+  - Interrupt enabling with STI instruction
+  - Foundation for responsive kernel operations
 
 ## Future Plans 🚀
 
