@@ -107,20 +107,35 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     };
 
     println!("Memory map acquired ({} entries)", memory_map.entries().len());
+
+    // Store memory map information for kernel use
+    let mut total_memory_kb = 0u64;
+    let mut usable_memory_kb = 0u64;
+    let mut memory_entries = 0;
+
+    for entry in memory_map.entries() {
+        memory_entries += 1;
+        let size_kb = (entry.page_count * 4096) / 1024;
+        total_memory_kb += size_kb;
+
+        // Count conventional memory as usable
+        if entry.ty == uefi::table::boot::MemoryType::CONVENTIONAL {
+            usable_memory_kb += size_kb;
+        }
+    }
+
     println!("About to call exit_boot_services - this is the critical transition!");
     println!("After this call, UEFI boot services will be unavailable...");
 
     // CRITICAL: Exit boot services - this is the kernel hand-off!
     // Note: After this call, UEFI boot services are no longer available
     // This transitions us from UEFI application to bare-metal kernel
-
+    
     println!("Calling exit_boot_services...");
     println!("If successful, this will be the last UEFI message you see!");
 
     // Exit boot services - this either succeeds or resets the system
-    let (_runtime_table, _final_memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA);
-
-    // SUCCESS! We're now in bare-metal kernel mode
+    let (_runtime_table, _final_memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA);    // SUCCESS! We're now in bare-metal kernel mode
     // UEFI services are gone - we can't use println! anymore
     // Set up basic VGA text output for kernel messages
 
@@ -178,6 +193,45 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
                 let char = (byte as u16) | 0x0E00; // Yellow on black
                 VGA_BUFFER.add(VGA_WIDTH * 2 + i).write_volatile(char); // Third line
             }
+        }
+    }
+
+    // Display memory information on VGA screen
+    unsafe {
+        // Convert numbers to strings manually (no std format!)
+        let total_mb = total_memory_kb / 1024;
+        let usable_mb = usable_memory_kb / 1024;
+
+        // Simple memory info display
+        let mem_msg = b"Memory: ";
+        let mut pos = 0;
+
+        // Write "Memory: "
+        for &byte in mem_msg.iter() {
+            if pos < VGA_WIDTH {
+                let char = (byte as u16) | 0x0C00; // Red on black
+                VGA_BUFFER.add(VGA_WIDTH * 3 + pos).write_volatile(char);
+            }
+            pos += 1;
+        }
+
+        // Write total memory (simplified - just show approximate MB)
+        let mb_digits = [b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9'];
+        let hundreds = (total_mb / 100) as usize % 10;
+        let tens = (total_mb / 10) as usize % 10;
+        let ones = total_mb as usize % 10;
+
+        if pos < VGA_WIDTH { VGA_BUFFER.add(VGA_WIDTH * 3 + pos).write_volatile((mb_digits[hundreds] as u16) | 0x0C00); pos += 1; }
+        if pos < VGA_WIDTH { VGA_BUFFER.add(VGA_WIDTH * 3 + pos).write_volatile((mb_digits[tens] as u16) | 0x0C00); pos += 1; }
+        if pos < VGA_WIDTH { VGA_BUFFER.add(VGA_WIDTH * 3 + pos).write_volatile((mb_digits[ones] as u16) | 0x0C00); pos += 1; }
+
+        let mb_msg = b" MB total";
+        for &byte in mb_msg.iter() {
+            if pos < VGA_WIDTH {
+                let char = (byte as u16) | 0x0C00;
+                VGA_BUFFER.add(VGA_WIDTH * 3 + pos).write_volatile(char);
+            }
+            pos += 1;
         }
     }
 
