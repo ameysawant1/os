@@ -5,6 +5,11 @@ use uefi::prelude::*;
 use uefi_services::println;
 use uefi::table::boot::MemoryType;
 
+// VGA constants
+const VGA_BUFFER: *mut u16 = 0xB8000 as *mut u16;
+const VGA_WIDTH: usize = 80;
+const VGA_HEIGHT: usize = 25;
+
 /// Set up basic identity-mapped paging for the first 4GB of memory
 unsafe fn setup_paging() {
     // Page table entry flags
@@ -150,6 +155,173 @@ struct IdtPtr {
 }
 
 static mut IDT: Idt = Idt::new();
+
+/// Basic AI Text Analyzer for semantic processing
+struct TextAnalyzer {
+    // Simple keyword-based categorization
+    tech_keywords: &'static [&'static str],
+    creative_keywords: &'static [&'static str],
+    data_keywords: &'static [&'static str],
+}
+
+impl TextAnalyzer {
+    const fn new() -> Self {
+        TextAnalyzer {
+            tech_keywords: &["code", "program", "kernel", "memory", "cpu", "system", "os", "rust", "compile"],
+            creative_keywords: &["design", "art", "music", "write", "create", "story", "image", "video"],
+            data_keywords: &["data", "analyze", "chart", "graph", "statistics", "database", "query", "search"],
+        }
+    }
+
+    fn analyze_text(&self, text: &str) -> TextCategory {
+        let mut tech_score = 0;
+        let mut creative_score = 0;
+        let mut data_score = 0;
+
+        // Simple case-insensitive keyword matching using byte arrays
+        let text_bytes = text.as_bytes();
+        let mut text_lower = [0u8; 256];
+        for (i, &byte) in text_bytes.iter().enumerate().take(255) {
+            text_lower[i] = byte.to_ascii_lowercase();
+        }
+
+        // Count keyword matches (case-insensitive)
+        for &keyword in self.tech_keywords.iter() {
+            if self.contains_keyword(&text_lower, keyword) {
+                tech_score += 1;
+            }
+        }
+
+        for &keyword in self.creative_keywords.iter() {
+            if self.contains_keyword(&text_lower, keyword) {
+                creative_score += 1;
+            }
+        }
+
+        for &keyword in self.data_keywords.iter() {
+            if self.contains_keyword(&text_lower, keyword) {
+                data_score += 1;
+            }
+        }
+
+        // Determine category based on highest score
+        if tech_score >= creative_score && tech_score >= data_score {
+            TextCategory::Technical
+        } else if creative_score >= data_score {
+            TextCategory::Creative
+        } else {
+            TextCategory::Data
+        }
+    }
+
+    fn contains_keyword(&self, text_lower: &[u8; 256], keyword: &str) -> bool {
+        let keyword_bytes = keyword.as_bytes();
+        let keyword_len = keyword_bytes.len();
+        if keyword_len == 0 {
+            return false;
+        }
+
+        let text_len = text_lower.iter().position(|&x| x == 0).unwrap_or(text_lower.len());
+
+        for i in 0..=(text_len.saturating_sub(keyword_len)) {
+            let mut matches = true;
+            for j in 0..keyword_len {
+                let keyword_char = keyword_bytes[j].to_ascii_lowercase();
+                if text_lower[i + j] != keyword_char {
+                    matches = false;
+                    break;
+                }
+            }
+            if matches {
+                return true;
+            }
+        }
+        false
+    }
+
+    fn extract_features(&self, text: &str) -> TextFeatures {
+        let char_count = text.chars().count();
+        let word_count = text.split_whitespace().count();
+        let has_numbers = text.chars().any(|c| c.is_numeric());
+        let has_punctuation = text.chars().any(|c| !c.is_alphanumeric() && !c.is_whitespace());
+
+        TextFeatures {
+            char_count,
+            word_count,
+            has_numbers,
+            has_punctuation,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TextCategory {
+    Technical,
+    Creative,
+    Data,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct TextFeatures {
+    char_count: usize,
+    word_count: usize,
+    has_numbers: bool,
+    has_punctuation: bool,
+}
+
+static mut TEXT_ANALYZER: TextAnalyzer = TextAnalyzer::new();
+
+/// Demonstrate AI text analysis
+unsafe fn demonstrate_ai() {
+    let sample_texts = [
+        "This kernel is written in Rust programming language",
+        "The memory management system uses paging and virtual memory",
+        "Data analysis shows interesting patterns in user behavior",
+        "Creating beautiful user interfaces requires design skills",
+    ];
+
+    // Analyze each text sample
+    for (i, &text) in sample_texts.iter().enumerate() {
+        let category = (*core::ptr::addr_of!(TEXT_ANALYZER)).analyze_text(text);
+        let _features = (*core::ptr::addr_of!(TEXT_ANALYZER)).extract_features(text);
+
+        // Display results on VGA (starting from line 6)
+        let line_offset = VGA_WIDTH * (6 + i * 2);
+
+        // Show category
+        let category_text = match category {
+            TextCategory::Technical => b"TECH: ",
+            TextCategory::Creative => b"ART:  ",
+            TextCategory::Data => b"DATA: ",
+        };
+
+        for (j, &byte) in category_text.iter().enumerate() {
+            if j < VGA_WIDTH {
+                let char = (byte as u16) | 0x0D00; // Magenta on black
+                VGA_BUFFER.add(line_offset + j).write_volatile(char);
+            }
+        }
+
+        // Show first part of text (truncated)
+        let text_bytes = text.as_bytes();
+        for j in 0..(VGA_WIDTH - 7).min(text_bytes.len()) {
+            if j < text_bytes.len() {
+                let char_byte = text_bytes[j];
+                let char = (char_byte as u16) | 0x0700; // White on black
+                VGA_BUFFER.add(line_offset + 7 + j).write_volatile(char);
+            }
+        }
+    }
+
+    // Show AI status
+    let ai_status = b"AI Text Analyzer: ACTIVE";
+    for (i, &byte) in ai_status.iter().enumerate() {
+        if i < VGA_WIDTH {
+            let char = (byte as u16) | 0x0E00; // Yellow on black
+            VGA_BUFFER.add(VGA_WIDTH * 14 + i).write_volatile(char); // Line 15
+        }
+    }
+}
 
 /// Basic interrupt handlers
 unsafe extern "C" fn divide_by_zero_handler() {
@@ -317,6 +489,11 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
                 VGA_BUFFER.add(VGA_WIDTH * 4 + i).write_volatile(char); // Fifth line
             }
         }
+    }
+
+    // Demonstrate AI text analysis
+    unsafe {
+        demonstrate_ai();
     }
 
     // Test the heap allocator
