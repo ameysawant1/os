@@ -25,6 +25,7 @@
   - Basic heap allocator (bump allocator, 1MB heap)
   - Page table setup and CR3/CR0 configuration
   - Memory allocation testing and validation
+  - UEFI memory map processing and statistics display
 
 ## Future Plans 🚀
 
