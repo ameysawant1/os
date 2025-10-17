@@ -20,10 +20,11 @@
   - Automated image building script
   - QEMU testing integration
 
-- **Memory Safety**
-  - Rust's ownership system prevents common bugs
-  - No null pointer dereferences
-  - Safe abstractions over UEFI APIs
+- **Memory Management**
+  - x86_64 paging with identity mapping (2MB huge pages)
+  - Basic heap allocator (bump allocator, 1MB heap)
+  - Page table setup and CR3/CR0 configuration
+  - Memory allocation testing and validation
 
 ## Future Plans 🚀
 
