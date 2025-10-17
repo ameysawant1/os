@@ -1,8 +1,33 @@
-Features
---------
+# OS Features
 
-- UEFI boot system under `uefi/` containing bootloader and kernel
-- Image builder script to create a FAT-formatted EFI image
+## Currently Implemented
+
+- **Rust UEFI Boot System**
+  - 64-bit UEFI application written in Rust
+  - Uses `uefi` and `uefi-services` crates
+  - Prints boot messages and runs indefinitely
+  - Proper UEFI entry point with `#[entry]` macro
+
+- **Build System**
+  - Cargo-based build with release optimizations
+  - FAT32 EFI image creation
+  - Automated image building script
+  - QEMU testing integration
+
+- **Memory Safety**
+  - Rust's ownership system prevents common bugs
+  - No null pointer dereferences
+  - Safe abstractions over UEFI APIs
+
+## Future Plans
+
+- Memory management and allocation
+- Interrupt handling and device drivers
+- Filesystem implementation
+- Process scheduling
+- System calls and user space
+- Networking stack
+- GUI framework
 Core kernel & runtime (must-have → near-term)
 
 64-bit UEFI native boot

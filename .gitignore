@@ -7,7 +7,12 @@
 
 # Build directories
 build/
-uefi/*/output/
-uefi/*/*.o
-uefi/*/*.so
-uefi/*/*.efi
+image/
+target/
+
+# Rust
+Cargo.lock
+
+# IDE
+.vscode/
+.idea/
