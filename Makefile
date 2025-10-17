@@ -16,3 +16,9 @@ run: $(BUILD_DIR)/main_floppy.img
 
 clean:
 	rm -f $(BUILD_DIR)/*
+
+.PHONY: uefi
+uefi:
+	$(MAKE) -C uefi/bootloader all
+	$(MAKE) -C uefi/kernel all
+	(cd uefi/image && ./build_image.sh)

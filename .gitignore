@@ -1,0 +1,13 @@
+# Build artifacts
+*.bin
+*.img
+*.o
+*.so
+*.efi
+
+# Build directories
+build/
+uefi/*/output/
+uefi/*/*.o
+uefi/*/*.so
+uefi/*/*.efi
