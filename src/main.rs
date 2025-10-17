@@ -38,7 +38,30 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
 
     // SUCCESS! We're now in bare-metal kernel mode
     // UEFI services are gone - we can't use println! anymore
-    // In a real kernel, we'd set up VGA/serial output and continue
+    // Set up basic VGA text output for kernel messages
+
+    // VGA text buffer is at 0xB8000 in memory
+    const VGA_BUFFER: *mut u16 = 0xB8000 as *mut u16;
+    const VGA_WIDTH: usize = 80;
+    const VGA_HEIGHT: usize = 25;
+
+    // Clear screen and set up basic text output
+    unsafe {
+        for i in 0..(VGA_WIDTH * VGA_HEIGHT) {
+            VGA_BUFFER.add(i).write_volatile(0x0F00); // White on black space
+        }
+    }
+
+    // Write kernel initialization message
+    let message = b"Kernel initialized! Running in bare-metal mode...";
+    unsafe {
+        for (i, &byte) in message.iter().enumerate() {
+            if i < VGA_WIDTH {
+                let char = (byte as u16) | 0x0F00; // White on black
+                VGA_BUFFER.add(i).write_volatile(char);
+            }
+        }
+    }
 
     // For now, just infinite loop to show we're still running
     // (In a real kernel, this would be the scheduler/main kernel loop)
