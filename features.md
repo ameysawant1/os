@@ -1,8 +1,7 @@
 Features
 --------
 
-- Legacy 16-bit boot sector (reference) in `src/main.asm` remains unchanged.
-- New UEFI boot system under `uefi/` containing a small bootloader and kernel
+- UEFI boot system under `uefi/` containing bootloader and kernel
 - Image builder script to create a FAT-formatted EFI image
 Core kernel & runtime (must-have → near-term)
 
