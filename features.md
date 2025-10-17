@@ -1,12 +1,18 @@
 # OS Features
 
-## Currently Implemented
+## Currently Implemented ✅
 
 - **Rust UEFI Boot System**
   - 64-bit UEFI application written in Rust
   - Uses `uefi` and `uefi-services` crates
   - Prints boot messages and runs indefinitely
   - Proper UEFI entry point with `#[entry]` macro
+
+- **Kernel Hand-off (ExitBootServices)**
+  - Successfully transitions from UEFI application to bare-metal kernel
+  - Calls `exit_boot_services()` to relinquish UEFI control
+  - Runs in kernel mode without UEFI boot services
+  - Demonstrates proper UEFI → kernel architecture
 
 - **Build System**
   - Cargo-based build with release optimizations
@@ -19,7 +25,7 @@
   - No null pointer dereferences
   - Safe abstractions over UEFI APIs
 
-## Future Plans
+## Future Plans 🚀
 
 - Memory management and allocation
 - Interrupt handling and device drivers
