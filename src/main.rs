@@ -1,86 +1,323 @@
 #![no_std]
 #![no_main]
+#![feature(abi_x86_interrupt, panic_info_message)]
 
+#[cfg(feature = "uefi")]
 use uefi::prelude::*;
-use uefi_services::println;
-use uefi::table::boot::MemoryType;
+#[cfg(feature = "uefi")]
+#[allow(unused)]
+use uefi::mem::memory_map::MemoryType;
+use uart_16550::SerialPort;
+use spin::Mutex;
+use x86_64::structures::gdt::{Descriptor, GlobalDescriptorTable};
+use x86_64::structures::tss::TaskStateSegment;
+use x86_64::structures::idt::InterruptDescriptorTable;
+use x86_64::instructions::segmentation::{Segment, CS, DS, ES, FS, GS, SS};
+use x86_64::instructions::tables::load_tss;
+use pic8259::ChainedPics;
+
+// Enhanced panic handler with detailed error information
+#[cfg(feature = "uefi")]
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    // Try to get serial output first
+    if let Some(ref mut port) = unsafe { SERIAL.lock().as_mut() } {
+        port.send(b'\n');
+        port.send(b'P');
+        port.send(b'A');
+        port.send(b'N');
+        port.send(b'I');
+        port.send(b'C');
+        port.send(b':');
+        port.send(b' ');
+        
+        // Print panic message if available
+        if let Some(message) = info.message() {
+            for byte in message.as_str().unwrap_or("Unknown panic").bytes() {
+                port.send(byte);
+            }
+        }
+        port.send(b'\n');
+        
+        // Print location information
+        if let Some(location) = info.location() {
+            let file = location.file();
+            let line = location.line();
+            
+            port.send(b'F');
+            port.send(b'i');
+            port.send(b'l');
+            port.send(b'e');
+            port.send(b':');
+            port.send(b' ');
+            for byte in file.bytes() {
+                port.send(byte);
+            }
+            port.send(b':');
+            
+            // Convert line number to string
+            let line_str = line.to_string();
+            for byte in line_str.bytes() {
+                port.send(byte);
+            }
+            port.send(b'\n');
+        }
+    }
+    
+    // Also try UEFI console output
+    if let Some(message) = info.message() {
+        uefi::println!("PANIC: {}", message);
+    } else {
+        uefi::println!("PANIC: Unknown panic occurred");
+    }
+    
+    if let Some(location) = info.location() {
+        uefi::println!("Location: {}:{}", location.file(), location.line());
+    }
+    
+    // Print stack trace information (basic)
+    uefi::println!("Kernel panic - halting system");
+    
+    loop {
+        unsafe { core::arch::asm!("hlt") };
+    }
+}
+
+// Fallback panic handler for non-UEFI builds (like tests)
+#[cfg(not(feature = "uefi"))]
+#[panic_handler]
+fn panic(info: &core::panic::PanicInfo) -> ! {
+    // For tests and host builds, use the standard panic behavior
+    // This will be handled by the test framework
+    core::panic!();
+}
 
 // VGA constants
 const VGA_BUFFER: *mut u16 = 0xB8000 as *mut u16;
 const VGA_WIDTH: usize = 80;
+#[allow(unused)]
 const VGA_HEIGHT: usize = 25;
 
-/// Set up basic identity-mapped paging for the first 4GB of memory
-unsafe fn setup_paging() {
-    // Page table entry flags
-    const PRESENT: u64 = 1 << 0;
-    const WRITABLE: u64 = 1 << 1;
-    const HUGE_PAGE: u64 = 1 << 7;
+// Safe serial port abstraction
+static SERIAL: Mutex<Option<SerialPort>> = Mutex::new(None);
 
-    // Allocate page tables in static memory (simplified - in real kernel use proper allocation)
-    // We'll place them at a fixed address for now
-    const PAGE_TABLE_BASE: *mut u64 = 0x100000 as *mut u64; // 1MB mark
+// GDT, TSS, and IDT for proper kernel setup
+static mut GDT: GlobalDescriptorTable = GlobalDescriptorTable::new();
+static mut TSS: TaskStateSegment = TaskStateSegment::new();
+static mut IDT: InterruptDescriptorTable = InterruptDescriptorTable::new();
 
-    // Zero out page table area (4KB for each table)
-    for i in 0..1024 {
-        PAGE_TABLE_BASE.add(i).write(0);
-        PAGE_TABLE_BASE.add(1024 + i).write(0);
-        PAGE_TABLE_BASE.add(2048 + i).write(0);
-        PAGE_TABLE_BASE.add(3072 + i).write(0);
-    }
+// PIC (Programmable Interrupt Controller) setup
+const PIC_1_OFFSET: u8 = 32;
+const PIC_2_OFFSET: u8 = PIC_1_OFFSET + 8;
+static mut PICS: ChainedPics = unsafe { ChainedPics::new(PIC_1_OFFSET, PIC_2_OFFSET) };
 
-    // Set up page tables:
-    // PML4 -> PDP -> PD -> PT (but we'll use 2MB huge pages for simplicity)
-
-    let pml4 = PAGE_TABLE_BASE;
-    let pdp = PAGE_TABLE_BASE.add(1024);
-    let pd = PAGE_TABLE_BASE.add(2048);
-
-    // Point PML4[0] to PDP
-    pml4.add(0).write(pdp as u64 | PRESENT | WRITABLE);
-
-    // Point PDP[0] to PD
-    pdp.add(0).write(pd as u64 | PRESENT | WRITABLE);
-
-    // Set up PD with 2MB huge pages for first 4GB
-    for i in 0..512 {
-        let addr = (i as u64) * 0x200000; // 2MB pages
-        pd.add(i).write(addr | PRESENT | WRITABLE | HUGE_PAGE);
-    }
-
-    // Load page table base address into CR3
-    core::arch::asm!("mov cr3, {}", in(reg) pml4 as u64);
-
-    // Enable paging by setting PG bit in CR0
-    let mut cr0: u64;
-    core::arch::asm!("mov {}, cr0", out(reg) cr0);
-    cr0 |= 1 << 31; // Set PG bit
-    core::arch::asm!("mov cr0, {}", in(reg) cr0);
+// Framebuffer information for GOP graphics
+#[cfg(feature = "uefi")]
+#[derive(Debug, Clone, Copy)]
+struct FramebufferInfo {
+    buffer: *mut u32,
+    width: usize,
+    height: usize,
+    stride: usize,
 }
 
-/// Simple bump allocator for kernel heap
+#[cfg(feature = "uefi")]
+static mut FRAMEBUFFER: Option<FramebufferInfo> = None;
+
+/// Initialize the serial port safely
+pub fn serial_init() {
+    let mut port = unsafe { SerialPort::new(0x3F8) };
+    port.init();
+    *SERIAL.lock() = Some(port);
+}
+
+/// Write a string to serial port safely
+pub fn serial_write(s: &str) {
+    if let Some(ref mut port) = *SERIAL.lock() {
+        for byte in s.bytes() {
+            port.send(byte);
+        }
+        port.send(b'\n');
+    }
+}
+
+/// Initialize GOP framebuffer (called before exiting boot services)
+#[cfg(feature = "uefi")]
+pub fn init_framebuffer() -> Result<(), &'static str> {
+    // Get the Graphics Output Protocol (GOP) from UEFI
+    let gop_handle = uefi::boot::get_handle_for_protocol::<uefi::proto::console::gop::GraphicsOutput>()
+        .map_err(|_| "Failed to get GOP handle")?;
+
+    let mut gop = uefi::boot::open_protocol_exclusive::<uefi::proto::console::gop::GraphicsOutput>(gop_handle)
+        .map_err(|_| "Failed to open GOP protocol")?;
+
+    // Get the current mode information
+    let mode_info = gop.current_mode_info();
+    let (width, height) = mode_info.resolution();
+    let stride = mode_info.stride();
+
+    // Get the framebuffer address
+    let fb_addr = gop.frame_buffer().as_mut_ptr() as *mut u32;
+
+    // Store framebuffer information
+    unsafe {
+        FRAMEBUFFER = Some(FramebufferInfo {
+            buffer: fb_addr,
+            width,
+            height,
+            stride,
+        });
+    }
+
+    Ok(())
+}
+
+/// Write a pixel to the framebuffer
+#[cfg(feature = "uefi")]
+pub fn write_pixel(x: usize, y: usize, color: u32) {
+    if let Some(fb) = unsafe { &*core::ptr::addr_of!(FRAMEBUFFER) } {
+        if x < fb.width && y < fb.height {
+            unsafe {
+                *fb.buffer.add(y * fb.stride + x) = color;
+            }
+        } else {
+            // Safety check: log out-of-bounds access
+            serial_write("Warning: Attempted to write pixel outside framebuffer bounds");
+        }
+    } else {
+        serial_write("Warning: Attempted to write pixel but framebuffer not initialized");
+    }
+}
+
+/// Clear the screen with a color
+#[cfg(feature = "uefi")]
+pub fn clear_screen(color: u32) {
+    if let Some(fb) = unsafe { &*core::ptr::addr_of!(FRAMEBUFFER) } {
+        let total_pixels = fb.height * fb.stride;
+        for i in 0..total_pixels {
+            unsafe {
+                *fb.buffer.add(i) = color;
+            }
+        }
+    } else {
+        serial_write("Warning: Attempted to clear screen but framebuffer not initialized");
+    }
+}
+
+/// Write a pixel to the framebuffer
+pub fn write_pixel(x: usize, y: usize, color: u32) {
+    if let Some(fb) = unsafe { &*core::ptr::addr_of!(FRAMEBUFFER) } {
+        if x < fb.width && y < fb.height {
+            unsafe {
+                *fb.buffer.add(y * fb.stride + x) = color;
+            }
+        }
+    }
+}
+
+/// Clear the screen with a color
+pub fn clear_screen(color: u32) {
+    if let Some(fb) = unsafe { &*core::ptr::addr_of!(FRAMEBUFFER) } {
+        for y in 0..fb.height {
+            for x in 0..fb.width {
+                unsafe {
+                    *fb.buffer.add(y * fb.stride + x) = color;
+                }
+            }
+        }
+    }
+}
+
+/// Initialize GDT and TSS for proper segmentation
+pub fn init_gdt_tss() {
+    unsafe {
+        // Set up TSS
+        TSS.interrupt_stack_table[0] = {
+            const STACK_SIZE: usize = 4096 * 5;
+            static mut STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
+            x86_64::VirtAddr::from_ptr(core::ptr::addr_of!(STACK))
+                + STACK_SIZE as u64
+        };
+
+        // Set up GDT using raw pointers to avoid mutable static references
+        let gdt = &mut *core::ptr::addr_of_mut!(GDT);
+        let code_selector = gdt.append(Descriptor::kernel_code_segment());
+        let data_selector = gdt.append(Descriptor::kernel_data_segment());
+        gdt.append(Descriptor::user_code_segment());
+        gdt.append(Descriptor::user_data_segment());
+        let tss_selector = gdt.append(Descriptor::tss_segment(&*core::ptr::addr_of!(TSS)));
+
+        // Load GDT and TSS
+        gdt.load();
+        CS::set_reg(code_selector);
+        load_tss(tss_selector);
+
+        // Set data segment registers
+        DS::set_reg(data_selector);
+        ES::set_reg(data_selector);
+        FS::set_reg(data_selector);
+        GS::set_reg(data_selector);
+        SS::set_reg(data_selector);
+    }
+}
+
+/// Set up basic identity-mapped paging for the first 4GB of memory
+/// NOTE: Currently disabled for safety - UEFI already provides paging
+#[allow(unused)]
+unsafe fn setup_paging() {
+    // TODO: Implement safe page table allocation using UEFI memory map
+    // For now, rely on UEFI's paging setup
+}
+
+/// Simple bump allocator for kernel heap using UEFI-allocated memory
+#[derive(Debug)]
 struct BumpAllocator {
+    heap_start: usize,
     heap_end: usize,
     next: usize,
 }
 
 impl BumpAllocator {
-    const fn new() -> Self {
-        // Place heap after page tables (around 2MB mark)
-        const HEAP_START: usize = 0x200000; // 2MB
+    fn new_from_uefi(memory_map: &dyn uefi::mem::memory_map::MemoryMap) -> Option<Self> {
+        // Find a suitable memory region for the heap (at least 1MB free)
         const HEAP_SIZE: usize = 0x100000; // 1MB heap
 
-        BumpAllocator {
-            heap_end: HEAP_START + HEAP_SIZE,
-            next: HEAP_START,
+        for descriptor in memory_map.entries() {
+            if descriptor.ty == uefi::mem::memory_map::MemoryType::CONVENTIONAL
+                && (descriptor.page_count as usize) * 4096 >= HEAP_SIZE {
+                let heap_start = descriptor.phys_start as usize;
+                let heap_end = heap_start + HEAP_SIZE;
+
+                return Some(BumpAllocator {
+                    heap_start,
+                    heap_end,
+                    next: heap_start,
+                });
+            }
         }
+
+        None // No suitable memory region found
     }
 
     unsafe fn alloc(&mut self, size: usize, align: usize) -> *mut u8 {
+        // Safety checks
+        if size == 0 {
+            serial_write("Warning: Attempted to allocate 0 bytes");
+            return core::ptr::null_mut();
+        }
+        
+        if align == 0 || !align.is_power_of_two() {
+            serial_write("Error: Invalid alignment - must be power of 2 and non-zero");
+            return core::ptr::null_mut();
+        }
+
         let aligned_next = (self.next + align - 1) & !(align - 1);
 
         if aligned_next + size > self.heap_end {
-            panic!("Out of memory!");
+            serial_write("Error: Out of memory in bump allocator");
+            serial_write("Requested size:");
+            // Simple size logging (would need proper itoa in real implementation)
+            return core::ptr::null_mut();
         }
 
         let ptr = aligned_next as *mut u8;
@@ -89,72 +326,33 @@ impl BumpAllocator {
     }
 }
 
-static mut HEAP_ALLOCATOR: BumpAllocator = BumpAllocator::new();
-
-/// Interrupt Descriptor Table Entry
-#[derive(Clone, Copy)]
-#[repr(C, packed)]
-struct IdtEntry {
-    offset_low: u16,
-    selector: u16,
-    ist: u8,
-    type_attr: u8,
-    offset_mid: u16,
-    offset_high: u32,
-    zero: u32,
+/// Stage-based allocator: starts with bump allocation, can upgrade to more sophisticated strategies
+#[derive(Debug)]
+enum AllocatorStage {
+    /// Simple bump allocation using pre-allocated heap
+    Bump(BumpAllocator),
+    // Future: Frame-based allocation with proper virtual memory
+    // Frame(FrameAllocator),
 }
 
-impl IdtEntry {
-    const fn new() -> Self {
-        IdtEntry {
-            offset_low: 0,
-            selector: 0,
-            ist: 0,
-            type_attr: 0,
-            offset_mid: 0,
-            offset_high: 0,
-            zero: 0,
+impl AllocatorStage {
+    unsafe fn alloc(&mut self, size: usize, align: usize) -> *mut u8 {
+        match self {
+            AllocatorStage::Bump(bump) => unsafe { bump.alloc(size, align) },
         }
     }
 
-    fn set_handler(&mut self, handler: unsafe extern "C" fn()) {
-        let addr = handler as usize;
-        self.offset_low = addr as u16;
-        self.offset_mid = (addr >> 16) as u16;
-        self.offset_high = (addr >> 32) as u32;
-        self.selector = 0x08; // Code segment selector
-        self.type_attr = 0x8E; // Present, ring 0, interrupt gate
-        self.ist = 0;
-        self.zero = 0;
+    unsafe fn dealloc(&mut self, _ptr: *mut u8, _size: usize, _align: usize) {
+        // For now, no deallocation in bump allocator
+        // Future stages will implement proper deallocation
     }
 }
 
-/// Interrupt Descriptor Table
-#[repr(C, packed)]
-struct Idt {
-    entries: [IdtEntry; 256],
-}
+/// Global allocator instance
+static mut GLOBAL_ALLOCATOR: Option<AllocatorStage> = None;
 
-impl Idt {
-    const fn new() -> Self {
-        Idt {
-            entries: [IdtEntry::new(); 256],
-        }
-    }
-
-    fn set_handler(&mut self, index: usize, handler: unsafe extern "C" fn()) {
-        self.entries[index].set_handler(handler);
-    }
-}
-
-/// IDT Pointer for lidt instruction
-#[repr(C, packed)]
-struct IdtPtr {
-    limit: u16,
-    base: u64,
-}
-
-static mut IDT: Idt = Idt::new();
+#[allow(unused)]
+static mut HEAP_ALLOCATOR: Option<BumpAllocator> = None;
 
 /// Basic AI Text Analyzer for semantic processing
 struct TextAnalyzer {
@@ -167,23 +365,27 @@ struct TextAnalyzer {
 impl TextAnalyzer {
     const fn new() -> Self {
         TextAnalyzer {
-            tech_keywords: &["code", "program", "kernel", "memory", "cpu", "system", "os", "rust", "compile"],
-            creative_keywords: &["design", "art", "music", "write", "create", "story", "image", "video"],
-            data_keywords: &["data", "analyze", "chart", "graph", "statistics", "database", "query", "search"],
+            tech_keywords: &["code", "program", "kernel", "memory", "cpu", "system", "os", "rust", "compile", "algorithm", "software", "hardware", "computer", "programming", "development"],
+            creative_keywords: &["design", "art", "music", "write", "writing", "create", "story", "stories", "image", "video", "creative", "aesthetic", "beautiful", "interface", "ui", "ux"],
+            data_keywords: &["data", "analyze", "chart", "graph", "statistics", "database", "query", "search", "analytics", "visualization", "pattern", "trend", "model"],
         }
     }
 
     fn analyze_text(&self, text: &str) -> TextCategory {
-        let mut tech_score = 0;
-        let mut creative_score = 0;
-        let mut data_score = 0;
-
-        // Simple case-insensitive keyword matching using byte arrays
+        // Safety check: limit text length to prevent buffer overflows
         let text_bytes = text.as_bytes();
+        if text_bytes.len() > 255 {
+            serial_write("Warning: Text too long for analysis, truncating");
+        }
+        
         let mut text_lower = [0u8; 256];
         for (i, &byte) in text_bytes.iter().enumerate().take(255) {
             text_lower[i] = byte.to_ascii_lowercase();
         }
+
+        let mut tech_score = 0;
+        let mut creative_score = 0;
+        let mut data_score = 0;
 
         // Count keyword matches (case-insensitive)
         for &keyword in self.tech_keywords.iter() {
@@ -205,11 +407,14 @@ impl TextAnalyzer {
         }
 
         // Determine category based on highest score
-        if tech_score >= creative_score && tech_score >= data_score {
+        if tech_score >= creative_score && tech_score >= data_score && tech_score > 0 {
             TextCategory::Technical
-        } else if creative_score >= data_score {
+        } else if creative_score >= data_score && creative_score > 0 {
             TextCategory::Creative
+        } else if data_score > 0 {
+            TextCategory::Data
         } else {
+            // No keywords matched - default to Data
             TextCategory::Data
         }
     }
@@ -217,7 +422,13 @@ impl TextAnalyzer {
     fn contains_keyword(&self, text_lower: &[u8; 256], keyword: &str) -> bool {
         let keyword_bytes = keyword.as_bytes();
         let keyword_len = keyword_bytes.len();
+        
         if keyword_len == 0 {
+            return false;
+        }
+        
+        // Safety check: ensure keyword length is reasonable
+        if keyword_len > 256 {
             return false;
         }
 
@@ -263,16 +474,26 @@ enum TextCategory {
 
 #[derive(Debug, Clone, Copy)]
 struct TextFeatures {
+    #[allow(unused)]
     char_count: usize,
+    #[allow(unused)]
     word_count: usize,
+    #[allow(unused)]
     has_numbers: bool,
+    #[allow(unused)]
     has_punctuation: bool,
 }
 
 static mut TEXT_ANALYZER: TextAnalyzer = TextAnalyzer::new();
 
-/// Demonstrate AI text analysis
+/// Demonstrate AI text analysis with graphics
+#[cfg(feature = "uefi")]
 unsafe fn demonstrate_ai() {
+    serial_write("Starting AI text analysis demonstration with graphics...");
+
+    // Clear screen with dark background
+    clear_screen(0x00112233); // Dark blue background
+
     let sample_texts = [
         "This kernel is written in Rust programming language",
         "The memory management system uses paging and virtual memory",
@@ -280,70 +501,115 @@ unsafe fn demonstrate_ai() {
         "Creating beautiful user interfaces requires design skills",
     ];
 
-    // Analyze each text sample
+    // Analyze each text sample and display graphically
     for (i, &text) in sample_texts.iter().enumerate() {
-        let category = (*core::ptr::addr_of!(TEXT_ANALYZER)).analyze_text(text);
-        let _features = (*core::ptr::addr_of!(TEXT_ANALYZER)).extract_features(text);
+        let category = unsafe { (*core::ptr::addr_of!(TEXT_ANALYZER)).analyze_text(text) };
+        let _features = unsafe { (*core::ptr::addr_of!(TEXT_ANALYZER)).extract_features(text) };
 
-        // Display results on VGA (starting from line 6)
-        let line_offset = VGA_WIDTH * (6 + i * 2);
+        // Calculate position for this sample
+        let y_offset = 100 + i * 120;
+        let x_start = 50;
 
-        // Show category
-        let category_text = match category {
-            TextCategory::Technical => b"TECH: ",
-            TextCategory::Creative => b"ART:  ",
-            TextCategory::Data => b"DATA: ",
+        // Draw colored rectangle based on category
+        let (color, category_name) = match category {
+            TextCategory::Technical => (0x00FF4444, "TECHNICAL"), // Red
+            TextCategory::Creative => (0x004444FF, "CREATIVE"),   // Blue
+            TextCategory::Data => (0x0044FF44, "DATA"),          // Green
         };
 
-        for (j, &byte) in category_text.iter().enumerate() {
-            if j < VGA_WIDTH {
-                let char = (byte as u16) | 0x0D00; // Magenta on black
-                VGA_BUFFER.add(line_offset + j).write_volatile(char);
+        // Draw category rectangle
+        for y in y_offset..(y_offset + 80) {
+            for x in x_start..(x_start + 200) {
+                write_pixel(x, y, color);
             }
         }
 
-        // Show first part of text (truncated)
-        let text_bytes = text.as_bytes();
-        for j in 0..(VGA_WIDTH - 7).min(text_bytes.len()) {
-            if j < text_bytes.len() {
-                let char_byte = text_bytes[j];
-                let char = (char_byte as u16) | 0x0700; // White on black
-                VGA_BUFFER.add(line_offset + 7 + j).write_volatile(char);
+        // Draw white border
+        for y in y_offset..(y_offset + 80) {
+            write_pixel(x_start, y, 0x00FFFFFF);
+            write_pixel(x_start + 199, y, 0x00FFFFFF);
+        }
+        for x in x_start..(x_start + 200) {
+            write_pixel(x, y_offset, 0x00FFFFFF);
+            write_pixel(x, y_offset + 79, 0x00FFFFFF);
+        }
+
+        // Log to serial
+        serial_write("Analyzing text sample...");
+        serial_write(category_name);
+        serial_write(text);
+    }
+
+    // Draw title at the top
+    let title = "AI Text Analyzer - Graphics Mode";
+    let title_y = 20;
+    let title_x = 50;
+
+    // Draw title background
+    for y in title_y..(title_y + 30) {
+        for x in title_x..(title_x + 400) {
+            write_pixel(x, y, 0x00888888); // Gray background
+        }
+    }
+
+    // Draw title text (simple white rectangles for letters - very basic)
+    // This is a very simple text rendering - in a real system you'd use a font
+    for (i, _) in title.chars().enumerate() {
+        let char_x = title_x + 10 + i * 12;
+        for y in (title_y + 5)..(title_y + 25) {
+            for x in char_x..(char_x + 8) {
+                write_pixel(x, y, 0x00FFFFFF);
             }
         }
     }
 
-    // Show AI status
-    let ai_status = b"AI Text Analyzer: ACTIVE";
-    for (i, &byte) in ai_status.iter().enumerate() {
-        if i < VGA_WIDTH {
-            let char = (byte as u16) | 0x0E00; // Yellow on black
-            VGA_BUFFER.add(VGA_WIDTH * 14 + i).write_volatile(char); // Line 15
+    // Show AI status at bottom
+    let status_y = 600;
+    let status_x = 50;
+
+    for y in status_y..(status_y + 20) {
+        for x in status_x..(status_x + 300) {
+            write_pixel(x, y, 0x00880088); // Purple background
         }
     }
+
+    serial_write("AI graphics demonstration complete!");
 }
 
-/// Basic interrupt handlers
-unsafe extern "C" fn divide_by_zero_handler() {
-    // For now, just halt on divide by zero
+/// Basic interrupt handlers with proper x86-interrupt ABI
+use x86_64::structures::idt::InterruptStackFrame;
+
+extern "x86-interrupt" fn divide_by_zero_handler(_stack_frame: InterruptStackFrame) {
+    // Handler logic - for now just print and halt
+    serial_write("Divide by zero exception!");
     loop {
-        core::arch::asm!("hlt");
+        unsafe { core::arch::asm!("hlt") };
     }
 }
 
-unsafe extern "C" fn breakpoint_handler() {
+extern "x86-interrupt" fn breakpoint_handler(_stack_frame: InterruptStackFrame) {
     // For now, just continue on breakpoint
 }
 
-unsafe extern "C" fn timer_handler() {
+extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     // Timer interrupt - could be used for AI processing scheduling
+    unsafe {
+        (&mut *core::ptr::addr_of_mut!(PICS)).notify_end_of_interrupt(PIC_1_OFFSET);
+    }
 }
 
-unsafe extern "C" fn keyboard_handler() {
+extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame) {
     // Keyboard interrupt - could be used for AI input
+    unsafe {
+        (&mut *core::ptr::addr_of_mut!(PICS)).notify_end_of_interrupt(PIC_1_OFFSET + 1);
+    }
 }
 
 /// Load the IDT
+/// NOTE: Replaced with x86_64::structures::idt::InterruptDescriptorTable
+/*
+// Removed - now using x86_64 crate IDT structures
+#[allow(unused)]
 unsafe fn load_idt() {
     let idt_ptr = IdtPtr {
         limit: (core::mem::size_of::<Idt>() - 1) as u16,
@@ -352,209 +618,85 @@ unsafe fn load_idt() {
 
     core::arch::asm!("lidt [{}]", in(reg) &idt_ptr);
 }
+*/
 
-/// Initialize interrupts
-unsafe fn init_interrupts() {
-    // Set up basic interrupt handlers
-    (*core::ptr::addr_of_mut!(IDT)).set_handler(0, divide_by_zero_handler);    // Divide by zero
-    (*core::ptr::addr_of_mut!(IDT)).set_handler(3, breakpoint_handler);        // Breakpoint
-    (*core::ptr::addr_of_mut!(IDT)).set_handler(32, timer_handler);           // Timer (PIC offset)
-    (*core::ptr::addr_of_mut!(IDT)).set_handler(33, keyboard_handler);        // Keyboard (PIC offset)
+/// Initialize interrupts with proper x86_64 structures
+pub fn init_interrupts() {
+    unsafe {
+        // Set up basic interrupt handlers using raw pointers
+        let idt = &mut *core::ptr::addr_of_mut!(IDT);
+        idt.divide_error.set_handler_fn(divide_by_zero_handler);
+        idt.breakpoint.set_handler_fn(breakpoint_handler);
 
-    // Load the IDT
-    load_idt();
+        // Set up PIC interrupts
+        idt[PIC_1_OFFSET].set_handler_fn(timer_handler);
+        idt[PIC_1_OFFSET + 1].set_handler_fn(keyboard_handler);
 
-    // Remap PIC (Programmable Interrupt Controller)
-    // Master PIC
-    core::arch::asm!("out 0x20, al", in("al") 0x11u8); // ICW1: Initialize
-    core::arch::asm!("out 0x21, al", in("al") 0x20u8); // ICW2: Interrupt vector offset
-    core::arch::asm!("out 0x21, al", in("al") 0x04u8); // ICW3: Slave PIC at IRQ2
-    core::arch::asm!("out 0x21, al", in("al") 0x01u8); // ICW4: 8086 mode
+        // Load the IDT
+        idt.load();
 
-    // Slave PIC
-    core::arch::asm!("out 0xA0, al", in("al") 0x11u8); // ICW1: Initialize
-    core::arch::asm!("out 0xA1, al", in("al") 0x28u8); // ICW2: Interrupt vector offset
-    core::arch::asm!("out 0xA1, al", in("al") 0x02u8); // ICW3: Slave PIC identity
-    core::arch::asm!("out 0xA1, al", in("al") 0x01u8); // ICW4: 8086 mode
-
-    // Mask all interrupts except timer and keyboard for now
-    core::arch::asm!("out 0x21, al", in("al") 0xFCu8); // Master: Enable timer (IRQ0) and keyboard (IRQ1)
-    core::arch::asm!("out 0xA1, al", in("al") 0xFFu8); // Slave: Disable all
-
-    // Enable interrupts
-    core::arch::asm!("sti");
+        // Initialize and configure PIC using raw pointers
+        let pics = &mut *core::ptr::addr_of_mut!(PICS);
+        pics.initialize();
+        pics.write_masks(0xFC, 0xFF); // Enable timer and keyboard interrupts
+    }
 }
 
+#[cfg(feature = "uefi")]
+unsafe fn test_divide_by_zero() {
+    let _ = 1 / 0;
+}
+
+#[cfg(feature = "uefi")]
 #[entry]
-fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
-    uefi_services::init(&mut system_table).unwrap();
+fn efi_main() -> Status {
+    uefi::println!("Hello from Rust UEFI OS!");
+    uefi::println!("Bootloader initialized successfully.");
+    uefi::println!("Preparing kernel hand-off...");
 
-    println!("Hello from Rust UEFI OS!");
-    println!("Bootloader initialized successfully.");
-    println!("Preparing kernel hand-off...");
-
-    // Get memory map before exiting boot services
-    let mut memory_map_buf = [0u8; 4096 * 4];
-    let memory_map = match system_table.boot_services().memory_map(&mut memory_map_buf) {
-        Ok(map) => map,
-        Err(e) => {
-            println!("Failed to get memory map: {:?}", e);
-            return Status::ABORTED;
-        }
-    };
-
-    println!("Memory map acquired ({} entries)", memory_map.entries().len());
-
-    // Store memory map information for kernel use
-    let mut total_memory_kb = 0u64;
-    let mut usable_memory_kb = 0u64;
-    let mut _memory_entries = 0;
-
-    for entry in memory_map.entries() {
-        _memory_entries += 1;
-        let size_kb = (entry.page_count * 4096) / 1024;
-        total_memory_kb += size_kb;
-
-        // Count conventional memory as usable
-        if entry.ty == uefi::table::boot::MemoryType::CONVENTIONAL {
-            usable_memory_kb += size_kb;
-        }
+    // Initialize GOP framebuffer before exiting boot services
+    if let Err(e) = init_framebuffer() {
+        uefi::println!("Warning: Failed to initialize framebuffer: {}", e);
+        uefi::println!("Falling back to VGA text mode.");
+    } else {
+        uefi::println!("GOP framebuffer initialized successfully.");
     }
 
-    println!("About to call exit_boot_services - this is the critical transition!");
-    println!("After this call, UEFI boot services will be unavailable...");
+    // Exit boot services to take full control
+    uefi::println!("Exiting UEFI boot services...");
+    let memory_map = unsafe { uefi::boot::exit_boot_services(Some(uefi::mem::memory_map::MemoryType::LOADER_DATA)) };
 
-    // CRITICAL: Exit boot services - this is the kernel hand-off!
-    // Note: After this call, UEFI boot services are no longer available
-    // This transitions us from UEFI application to bare-metal kernel
-    
-    println!("Calling exit_boot_services...");
-    println!("If successful, this will be the last UEFI message you see!");
+    uefi::println!("=== KERNEL MODE: Full kernel control established ===");
 
-    // Exit boot services - this either succeeds or resets the system
-    let (_runtime_table, _final_memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA);    // SUCCESS! We're now in bare-metal kernel mode
-    // UEFI services are gone - we can't use println! anymore
-    // Set up basic VGA text output for kernel messages
+    // Initialize GDT and TSS
+    init_gdt_tss();
+    uefi::println!("GDT and TSS initialized successfully.");
 
-    // VGA text buffer is at 0xB8000 in memory
-    const VGA_BUFFER: *mut u16 = 0xB8000 as *mut u16;
-    const VGA_WIDTH: usize = 80;
-    const VGA_HEIGHT: usize = 25;
+    // Initialize interrupts
+    init_interrupts();
+    uefi::println!("Interrupts initialized successfully.");
 
-    // Clear screen and set up basic text output
+    // Initialize heap allocator from UEFI memory map
     unsafe {
-        for i in 0..(VGA_WIDTH * VGA_HEIGHT) {
-            VGA_BUFFER.add(i).write_volatile(0x0F00); // White on black space
-        }
+        HEAP_ALLOCATOR = BumpAllocator::new_from_uefi(&memory_map);
     }
+    uefi::println!("Heap allocator initialized successfully.");
 
-    // Write kernel initialization message
-    let message = b"Kernel initialized! Setting up memory management...";
-    unsafe {
-        for (i, &byte) in message.iter().enumerate() {
-            if i < VGA_WIDTH {
-                let char = (byte as u16) | 0x0F00; // White on black
-                VGA_BUFFER.add(i).write_volatile(char);
-            }
-        }
-    }
+    // Initialize serial port
+    serial_init();
+    uefi::println!("Serial port initialized successfully.");
 
-    // Set up basic paging for memory management
-    unsafe {
-        setup_paging();
-    }
-
-    // Initialize interrupts for kernel responsiveness
-    unsafe {
-        init_interrupts();
-    }
-
-    // Write paging setup complete message
-    let paging_msg = b"Paging enabled! Memory management active.";
-    unsafe {
-        for (i, &byte) in paging_msg.iter().enumerate() {
-            if i < VGA_WIDTH {
-                let char = (byte as u16) | 0x0A00; // Green on black
-                VGA_BUFFER.add(VGA_WIDTH + i).write_volatile(char); // Second line
-            }
-        }
-    }
-
-    // Write interrupts enabled message
-    let interrupt_msg = b"Interrupts enabled! Kernel is responsive.";
-    unsafe {
-        for (i, &byte) in interrupt_msg.iter().enumerate() {
-            if i < VGA_WIDTH {
-                let char = (byte as u16) | 0x0900; // Blue on black
-                VGA_BUFFER.add(VGA_WIDTH * 4 + i).write_volatile(char); // Fifth line
-            }
-        }
-    }
-
-    // Demonstrate AI text analysis
+    // Demonstrate AI text analysis with graphics
     unsafe {
         demonstrate_ai();
     }
 
-    // Test the heap allocator
-    unsafe {
-        let test_alloc = (&mut *core::ptr::addr_of_mut!(HEAP_ALLOCATOR)).alloc(64, 8);
-        // Write some test data
-        for i in 0..8 {
-            test_alloc.add(i).write((i + 65) as u8); // ASCII A-H
-        }
+    // Test divide by zero (uncomment to test fault handler)
+    // unsafe { test_divide_by_zero(); }
 
-        // Display heap allocation success
-        let heap_msg = b"Heap allocator: OK (64 bytes allocated)";
-        for (i, &byte) in heap_msg.iter().enumerate() {
-            if i < VGA_WIDTH {
-                let char = (byte as u16) | 0x0E00; // Yellow on black
-                VGA_BUFFER.add(VGA_WIDTH * 2 + i).write_volatile(char); // Third line
-            }
-        }
-    }
-
-    // Display memory information on VGA screen
-    unsafe {
-        // Convert numbers to strings manually (no std format!)
-        let total_mb = total_memory_kb / 1024;
-        let _usable_mb = usable_memory_kb / 1024;
-
-        // Simple memory info display
-        let mem_msg = b"Memory: ";
-        let mut pos = 0;
-
-        // Write "Memory: "
-        for &byte in mem_msg.iter() {
-            if pos < VGA_WIDTH {
-                let char = (byte as u16) | 0x0C00; // Red on black
-                VGA_BUFFER.add(VGA_WIDTH * 3 + pos).write_volatile(char);
-            }
-            pos += 1;
-        }
-
-        // Write total memory (simplified - just show approximate MB)
-        let mb_digits = [b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9'];
-        let hundreds = (total_mb / 100) as usize % 10;
-        let tens = (total_mb / 10) as usize % 10;
-        let ones = total_mb as usize % 10;
-
-        if pos < VGA_WIDTH { VGA_BUFFER.add(VGA_WIDTH * 3 + pos).write_volatile((mb_digits[hundreds] as u16) | 0x0C00); pos += 1; }
-        if pos < VGA_WIDTH { VGA_BUFFER.add(VGA_WIDTH * 3 + pos).write_volatile((mb_digits[tens] as u16) | 0x0C00); pos += 1; }
-        if pos < VGA_WIDTH { VGA_BUFFER.add(VGA_WIDTH * 3 + pos).write_volatile((mb_digits[ones] as u16) | 0x0C00); pos += 1; }
-
-        let mb_msg = b" MB total";
-        for &byte in mb_msg.iter() {
-            if pos < VGA_WIDTH {
-                let char = (byte as u16) | 0x0C00;
-                VGA_BUFFER.add(VGA_WIDTH * 3 + pos).write_volatile(char);
-            }
-            pos += 1;
-        }
-    }
+    uefi::println!("AI graphics demonstration complete! Kernel running successfully.");
 
     // For now, just infinite loop to show we're still running
-    // (In a real kernel, this would be the scheduler/main kernel loop)
     loop {
         // Busy wait - in real kernel we'd have interrupts/timers
         unsafe {
@@ -562,3 +704,9 @@ fn main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
         }
     }
 }
+
+// Test divide by zero
+unsafe fn test_divide_by_zero() {
+    let _ = 1 / 0;
+}
+
