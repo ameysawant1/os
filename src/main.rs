@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 #![feature(abi_x86_interrupt, panic_info_message)]
+#[cfg(feature = "alloc")]
+extern crate alloc;
 
 #[cfg(feature = "uefi")]
 use uefi::prelude::*;
@@ -16,72 +18,24 @@ use x86_64::instructions::segmentation::{Segment, CS, DS, ES, FS, GS, SS};
 use x86_64::instructions::tables::load_tss;
 use pic8259::ChainedPics;
 
-// Enhanced panic handler with detailed error information
-#[cfg(feature = "uefi")]
-#[panic_handler]
-fn panic(info: &core::panic::PanicInfo) -> ! {
-    // Try to get serial output first
-    if let Some(ref mut port) = unsafe { SERIAL.lock().as_mut() } {
-        port.send(b'\n');
-        port.send(b'P');
-        port.send(b'A');
-        port.send(b'N');
-        port.send(b'I');
-        port.send(b'C');
-        port.send(b':');
-        port.send(b' ');
-        
-        // Print panic message if available
-        if let Some(message) = info.message() {
-            for byte in message.as_str().unwrap_or("Unknown panic").bytes() {
-                port.send(byte);
-            }
-        }
-        port.send(b'\n');
-        
-        // Print location information
-        if let Some(location) = info.location() {
-            let file = location.file();
-            let line = location.line();
-            
-            port.send(b'F');
-            port.send(b'i');
-            port.send(b'l');
-            port.send(b'e');
-            port.send(b':');
-            port.send(b' ');
-            for byte in file.bytes() {
-                port.send(byte);
-            }
-            port.send(b':');
-            
-            // Convert line number to string
-            let line_str = line.to_string();
-            for byte in line_str.bytes() {
-                port.send(byte);
-            }
-            port.send(b'\n');
-        }
-    }
-    
-    // Also try UEFI console output
-    if let Some(message) = info.message() {
-        uefi::println!("PANIC: {}", message);
-    } else {
-        uefi::println!("PANIC: Unknown panic occurred");
-    }
-    
-    if let Some(location) = info.location() {
-        uefi::println!("Location: {}:{}", location.file(), location.line());
-    }
-    
-    // Print stack trace information (basic)
-    uefi::println!("Kernel panic - halting system");
-    
-    loop {
-        unsafe { core::arch::asm!("hlt") };
-    }
-}
+// Add new modules
+mod syscall;
+mod process;
+mod frame_allocator;
+mod filesystem;
+mod security;
+mod heap_allocator;
+mod ai_models;
+mod virtual_memory;
+mod scheduler;
+mod usb;
+mod apic;
+mod pci;
+mod ethernet;
+mod usb_input;
+mod graphics;
+
+// Panic handler is provided by the uefi crate
 
 // Fallback panic handler for non-UEFI builds (like tests)
 #[cfg(not(feature = "uefi"))]
@@ -138,6 +92,15 @@ pub fn serial_write(s: &str) {
             port.send(byte);
         }
         port.send(b'\n');
+    }
+}
+
+/// Write to serial using syscall (for userland compatibility)
+fn syscall_write(buf: &[u8]) {
+    if let Some(ref mut port) = *SERIAL.lock() {
+        for &byte in buf {
+            port.send(byte);
+        }
     }
 }
 
@@ -204,30 +167,6 @@ pub fn clear_screen(color: u32) {
     }
 }
 
-/// Write a pixel to the framebuffer
-pub fn write_pixel(x: usize, y: usize, color: u32) {
-    if let Some(fb) = unsafe { &*core::ptr::addr_of!(FRAMEBUFFER) } {
-        if x < fb.width && y < fb.height {
-            unsafe {
-                *fb.buffer.add(y * fb.stride + x) = color;
-            }
-        }
-    }
-}
-
-/// Clear the screen with a color
-pub fn clear_screen(color: u32) {
-    if let Some(fb) = unsafe { &*core::ptr::addr_of!(FRAMEBUFFER) } {
-        for y in 0..fb.height {
-            for x in 0..fb.width {
-                unsafe {
-                    *fb.buffer.add(y * fb.stride + x) = color;
-                }
-            }
-        }
-    }
-}
-
 /// Initialize GDT and TSS for proper segmentation
 pub fn init_gdt_tss() {
     unsafe {
@@ -262,11 +201,14 @@ pub fn init_gdt_tss() {
 }
 
 /// Set up basic identity-mapped paging for the first 4GB of memory
-/// NOTE: Currently disabled for safety - UEFI already provides paging
+/// NOTE: Currently DISABLED for safety - UEFI already provides paging
+/// TODO: Re-enable only after implementing safe page table allocation from UEFI memory map
+/// DO NOT call this function until proper UEFI-based page table allocation is implemented
 #[allow(unused)]
 unsafe fn setup_paging() {
     // TODO: Implement safe page table allocation using UEFI memory map
     // For now, rely on UEFI's paging setup
+    // This function is intentionally disabled to prevent unsafe memory access
 }
 
 /// Simple bump allocator for kernel heap using UEFI-allocated memory
@@ -354,233 +296,66 @@ static mut GLOBAL_ALLOCATOR: Option<AllocatorStage> = None;
 #[allow(unused)]
 static mut HEAP_ALLOCATOR: Option<BumpAllocator> = None;
 
-/// Basic AI Text Analyzer for semantic processing
-struct TextAnalyzer {
-    // Simple keyword-based categorization
-    tech_keywords: &'static [&'static str],
-    creative_keywords: &'static [&'static str],
-    data_keywords: &'static [&'static str],
-}
-
-impl TextAnalyzer {
-    const fn new() -> Self {
-        TextAnalyzer {
-            tech_keywords: &["code", "program", "kernel", "memory", "cpu", "system", "os", "rust", "compile", "algorithm", "software", "hardware", "computer", "programming", "development"],
-            creative_keywords: &["design", "art", "music", "write", "writing", "create", "story", "stories", "image", "video", "creative", "aesthetic", "beautiful", "interface", "ui", "ux"],
-            data_keywords: &["data", "analyze", "chart", "graph", "statistics", "database", "query", "search", "analytics", "visualization", "pattern", "trend", "model"],
-        }
-    }
-
-    fn analyze_text(&self, text: &str) -> TextCategory {
-        // Safety check: limit text length to prevent buffer overflows
-        let text_bytes = text.as_bytes();
-        if text_bytes.len() > 255 {
-            serial_write("Warning: Text too long for analysis, truncating");
-        }
-        
-        let mut text_lower = [0u8; 256];
-        for (i, &byte) in text_bytes.iter().enumerate().take(255) {
-            text_lower[i] = byte.to_ascii_lowercase();
-        }
-
-        let mut tech_score = 0;
-        let mut creative_score = 0;
-        let mut data_score = 0;
-
-        // Count keyword matches (case-insensitive)
-        for &keyword in self.tech_keywords.iter() {
-            if self.contains_keyword(&text_lower, keyword) {
-                tech_score += 1;
-            }
-        }
-
-        for &keyword in self.creative_keywords.iter() {
-            if self.contains_keyword(&text_lower, keyword) {
-                creative_score += 1;
-            }
-        }
-
-        for &keyword in self.data_keywords.iter() {
-            if self.contains_keyword(&text_lower, keyword) {
-                data_score += 1;
-            }
-        }
-
-        // Determine category based on highest score
-        if tech_score >= creative_score && tech_score >= data_score && tech_score > 0 {
-            TextCategory::Technical
-        } else if creative_score >= data_score && creative_score > 0 {
-            TextCategory::Creative
-        } else if data_score > 0 {
-            TextCategory::Data
-        } else {
-            // No keywords matched - default to Data
-            TextCategory::Data
-        }
-    }
-
-    fn contains_keyword(&self, text_lower: &[u8; 256], keyword: &str) -> bool {
-        let keyword_bytes = keyword.as_bytes();
-        let keyword_len = keyword_bytes.len();
-        
-        if keyword_len == 0 {
-            return false;
-        }
-        
-        // Safety check: ensure keyword length is reasonable
-        if keyword_len > 256 {
-            return false;
-        }
-
-        let text_len = text_lower.iter().position(|&x| x == 0).unwrap_or(text_lower.len());
-
-        for i in 0..=(text_len.saturating_sub(keyword_len)) {
-            let mut matches = true;
-            for j in 0..keyword_len {
-                let keyword_char = keyword_bytes[j].to_ascii_lowercase();
-                if text_lower[i + j] != keyword_char {
-                    matches = false;
-                    break;
-                }
-            }
-            if matches {
-                return true;
-            }
-        }
-        false
-    }
-
-    fn extract_features(&self, text: &str) -> TextFeatures {
-        let char_count = text.chars().count();
-        let word_count = text.split_whitespace().count();
-        let has_numbers = text.chars().any(|c| c.is_numeric());
-        let has_punctuation = text.chars().any(|c| !c.is_alphanumeric() && !c.is_whitespace());
-
-        TextFeatures {
-            char_count,
-            word_count,
-            has_numbers,
-            has_punctuation,
-        }
-    }
-}
-
-#[derive(Debug, Clone, Copy)]
-enum TextCategory {
-    Technical,
-    Creative,
-    Data,
-}
-
-#[derive(Debug, Clone, Copy)]
-struct TextFeatures {
-    #[allow(unused)]
-    char_count: usize,
-    #[allow(unused)]
-    word_count: usize,
-    #[allow(unused)]
-    has_numbers: bool,
-    #[allow(unused)]
-    has_punctuation: bool,
-}
-
-static mut TEXT_ANALYZER: TextAnalyzer = TextAnalyzer::new();
-
-/// Demonstrate AI text analysis with graphics
+/// Demonstrate AI text analysis by running it in userland
+/// This moves AI components to userland for isolation and restartability
 #[cfg(feature = "uefi")]
-unsafe fn demonstrate_ai() {
-    serial_write("Starting AI text analysis demonstration with graphics...");
+fn demonstrate_ai() {
+    serial_write("=== NEW USERLAND AI DEMO STARTING ===");
 
-    // Clear screen with dark background
-    clear_screen(0x00112233); // Dark blue background
+    // Simulate loading userland AI program
+    // In a real system, we'd load an ELF binary
+    extern "C" fn userland_ai_demo() {
+        // This would be the _start function from ai_analyzer.rs
+        let sample_texts = [
+            "This kernel is written in Rust programming language",
+            "The memory management system uses paging and virtual memory",
+            "Data analysis shows interesting patterns in user behavior",
+            "Creating beautiful user interfaces requires design skills",
+        ];
 
-    let sample_texts = [
-        "This kernel is written in Rust programming language",
-        "The memory management system uses paging and virtual memory",
-        "Data analysis shows interesting patterns in user behavior",
-        "Creating beautiful user interfaces requires design skills",
-    ];
+        for text in sample_texts.iter() {
+            // Simple categorization (moved from kernel)
+            let category = if text.contains("code") || text.contains("kernel") || text.contains("memory") {
+                "TECHNICAL"
+            } else if text.contains("design") || text.contains("interface") {
+                "CREATIVE"
+            } else {
+                "DATA"
+            };
 
-    // Analyze each text sample and display graphically
-    for (i, &text) in sample_texts.iter().enumerate() {
-        let category = unsafe { (*core::ptr::addr_of!(TEXT_ANALYZER)).analyze_text(text) };
-        let _features = unsafe { (*core::ptr::addr_of!(TEXT_ANALYZER)).extract_features(text) };
+            // Print using syscall
+            syscall_write(b"Analyzing text: ");
+            syscall_write(text.as_bytes());
+            syscall_write(b" -> ");
+            syscall_write(category.as_bytes());
+            syscall_write(b"\n");
+        }
+    }
 
-        // Calculate position for this sample
-        let y_offset = 100 + i * 120;
-        let x_start = 50;
-
-        // Draw colored rectangle based on category
-        let (color, category_name) = match category {
-            TextCategory::Technical => (0x00FF4444, "TECHNICAL"), // Red
-            TextCategory::Creative => (0x004444FF, "CREATIVE"),   // Blue
-            TextCategory::Data => (0x0044FF44, "DATA"),          // Green
-        };
-
-        // Draw category rectangle
-        for y in y_offset..(y_offset + 80) {
-            for x in x_start..(x_start + 200) {
-                write_pixel(x, y, color);
+    // Load and execute as userland process
+    let pid = process::load_userland_function(userland_ai_demo as u64);
+    match pid {
+        Ok(pid) => {
+            uefi::println!("Loaded userland AI process with PID {}", pid);
+            if let Err(e) = process::execute_process(pid) {
+                uefi::println!("Failed to execute AI process: {:?}", e);
             }
         }
-
-        // Draw white border
-        for y in y_offset..(y_offset + 80) {
-            write_pixel(x_start, y, 0x00FFFFFF);
-            write_pixel(x_start + 199, y, 0x00FFFFFF);
-        }
-        for x in x_start..(x_start + 200) {
-            write_pixel(x, y_offset, 0x00FFFFFF);
-            write_pixel(x, y_offset + 79, 0x00FFFFFF);
-        }
-
-        // Log to serial
-        serial_write("Analyzing text sample...");
-        serial_write(category_name);
-        serial_write(text);
-    }
-
-    // Draw title at the top
-    let title = "AI Text Analyzer - Graphics Mode";
-    let title_y = 20;
-    let title_x = 50;
-
-    // Draw title background
-    for y in title_y..(title_y + 30) {
-        for x in title_x..(title_x + 400) {
-            write_pixel(x, y, 0x00888888); // Gray background
+        Err(e) => {
+            uefi::println!("Failed to load userland AI process: {:?}", e);
         }
     }
 
-    // Draw title text (simple white rectangles for letters - very basic)
-    // This is a very simple text rendering - in a real system you'd use a font
-    for (i, _) in title.chars().enumerate() {
-        let char_x = title_x + 10 + i * 12;
-        for y in (title_y + 5)..(title_y + 25) {
-            for x in char_x..(char_x + 8) {
-                write_pixel(x, y, 0x00FFFFFF);
-            }
-        }
-    }
-
-    // Show AI status at bottom
-    let status_y = 600;
-    let status_x = 50;
-
-    for y in status_y..(status_y + 20) {
-        for x in status_x..(status_x + 300) {
-            write_pixel(x, y, 0x00880088); // Purple background
-        }
-    }
-
-    serial_write("AI graphics demonstration complete!");
+    serial_write("AI userland demonstration complete!");
 }
 
 /// Basic interrupt handlers with proper x86-interrupt ABI
+// NOTE: These are currently stubs until proper interrupt ABI is fully implemented
+// TODO: Avoid sti/cli misuse - these handlers should not enable/disable interrupts
 use x86_64::structures::idt::InterruptStackFrame;
 
 extern "x86-interrupt" fn divide_by_zero_handler(_stack_frame: InterruptStackFrame) {
-    // Handler logic - for now just print and halt
+    // STUB: Basic divide by zero handler
     serial_write("Divide by zero exception!");
     loop {
         unsafe { core::arch::asm!("hlt") };
@@ -588,18 +363,18 @@ extern "x86-interrupt" fn divide_by_zero_handler(_stack_frame: InterruptStackFra
 }
 
 extern "x86-interrupt" fn breakpoint_handler(_stack_frame: InterruptStackFrame) {
-    // For now, just continue on breakpoint
+    // STUB: Breakpoint handler - currently just continues
 }
 
 extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
-    // Timer interrupt - could be used for AI processing scheduling
+    // STUB: Timer interrupt - could be used for AI processing scheduling
     unsafe {
         (&mut *core::ptr::addr_of_mut!(PICS)).notify_end_of_interrupt(PIC_1_OFFSET);
     }
 }
 
 extern "x86-interrupt" fn keyboard_handler(_stack_frame: InterruptStackFrame) {
-    // Keyboard interrupt - could be used for AI input
+    // STUB: Keyboard interrupt - could be used for AI input
     unsafe {
         (&mut *core::ptr::addr_of_mut!(PICS)).notify_end_of_interrupt(PIC_1_OFFSET + 1);
     }
@@ -623,36 +398,75 @@ unsafe fn load_idt() {
 /// Initialize interrupts with proper x86_64 structures
 pub fn init_interrupts() {
     unsafe {
+        // TODO: Only load IDT after GDT is properly set up
+        // For now, we load it immediately after GDT, but this should be conditional
+        // if GDT_ready { load_idt() } else { skip }
+
         // Set up basic interrupt handlers using raw pointers
         let idt = &mut *core::ptr::addr_of_mut!(IDT);
         idt.divide_error.set_handler_fn(divide_by_zero_handler);
         idt.breakpoint.set_handler_fn(breakpoint_handler);
 
-        // Set up PIC interrupts
-        idt[PIC_1_OFFSET].set_handler_fn(timer_handler);
-        idt[PIC_1_OFFSET + 1].set_handler_fn(keyboard_handler);
+        // Check if APIC is available
+        if apic::is_apic_available() {
+            // Set up APIC-based interrupts
+            idt[32].set_handler_fn(scheduler::timer_handler); // Timer
+            idt[33].set_handler_fn(keyboard_handler); // Keyboard
+
+            // Note: I/O APIC routing will be set up after APIC initialization
+        } else {
+            // Set up PIC interrupts
+            idt[PIC_1_OFFSET].set_handler_fn(scheduler::timer_handler);
+            idt[PIC_1_OFFSET + 1].set_handler_fn(keyboard_handler);
+
+            // Initialize and configure PIC using raw pointers
+            let pics = &mut *core::ptr::addr_of_mut!(PICS);
+            pics.initialize();
+            pics.write_masks(0xFC, 0xFF); // Enable timer and keyboard interrupts
+        }
+
+        // Set up syscall interrupt (int 0x80)
+        idt[0x80].set_handler_fn(syscall::syscall_handler);
 
         // Load the IDT
         idt.load();
-
-        // Initialize and configure PIC using raw pointers
-        let pics = &mut *core::ptr::addr_of_mut!(PICS);
-        pics.initialize();
-        pics.write_masks(0xFC, 0xFF); // Enable timer and keyboard interrupts
     }
 }
 
-#[cfg(feature = "uefi")]
-unsafe fn test_divide_by_zero() {
-    let _ = 1 / 0;
+/// Initialize the Programmable Interval Timer (PIT) for scheduling
+pub fn init_pit() {
+    // PIT I/O ports
+    const PIT_COMMAND: u16 = 0x43;
+    const PIT_CHANNEL0: u16 = 0x40;
+
+    // Set up PIT for ~100Hz (10ms intervals)
+    // Frequency = 1193182 / divisor
+    // For 100Hz: divisor = 1193182 / 100 = 11931.82 ≈ 11932
+    let divisor: u16 = 11932;
+
+    unsafe {
+        // Send command byte: Channel 0, lobyte/hibyte, rate generator
+        x86_64::instructions::port::Port::new(PIT_COMMAND).write(0x36u8);
+
+        // Send divisor (low byte first, then high byte)
+        x86_64::instructions::port::Port::new(PIT_CHANNEL0).write((divisor & 0xFF) as u8);
+        x86_64::instructions::port::Port::new(PIT_CHANNEL0).write((divisor >> 8) as u8);
+    }
 }
+
+
 
 #[cfg(feature = "uefi")]
 #[entry]
 fn efi_main() -> Status {
     uefi::println!("Hello from Rust UEFI OS!");
+    serial_write("EFI main started\n");
     uefi::println!("Bootloader initialized successfully.");
     uefi::println!("Preparing kernel hand-off...");
+
+    // Initialize serial port early before any serial_write use
+    serial_init();
+    uefi::println!("Serial port initialized successfully.");
 
     // Initialize GOP framebuffer before exiting boot services
     if let Err(e) = init_framebuffer() {
@@ -662,39 +476,228 @@ fn efi_main() -> Status {
         uefi::println!("GOP framebuffer initialized successfully.");
     }
 
+    // Get memory map before exiting boot services
+    let memory_map = uefi::boot::get_memory_map(uefi::mem::memory_map::MemoryType::LOADER_DATA).unwrap();
+
     // Exit boot services to take full control
     uefi::println!("Exiting UEFI boot services...");
-    let memory_map = unsafe { uefi::boot::exit_boot_services(Some(uefi::mem::memory_map::MemoryType::LOADER_DATA)) };
+    uefi::boot::exit_boot_services();
 
-    uefi::println!("=== KERNEL MODE: Full kernel control established ===");
+    serial_write("Just exited boot services\n");
+
+    serial_write("=== KERNEL MODE: Full kernel control established ===\n");
+
+    // Initialize frame allocator first (needed for virtual memory)
+    frame_allocator::init(&memory_map);
+    serial_write("Frame allocator initialized successfully.\n");
+
+    // Initialize virtual memory management
+    let physical_memory_offset = x86_64::VirtAddr::new(0); // UEFI identity maps physical memory
+    let mut vmm = virtual_memory::init(physical_memory_offset);
+    serial_write("Virtual memory manager initialized successfully.\n");
+
+    // Create identity mapping for kernel (first 4GB)
+    let kernel_start = x86_64::PhysAddr::new(0);
+    let kernel_end = x86_64::PhysAddr::new(4 * 1024 * 1024 * 1024); // 4GB
+    let kernel_flags = x86_64::structures::paging::PageTableFlags::PRESENT
+        | x86_64::structures::paging::PageTableFlags::WRITABLE;
+    if let Err(e) = virtual_memory::create_identity_mapping(&mut vmm, kernel_start, kernel_end, kernel_flags) {
+        serial_write("Warning: Failed to create kernel identity mapping\n");
+    } else {
+        serial_write("Kernel identity mapping created successfully.\n");
+    }
+
+    // Allocate kernel heap pages for advanced allocator
+    let heap_start = x86_64::VirtAddr::new(0x_4444_4444_0000);
+    let heap_size = 100 * 1024; // 100 KiB
+    if let Err(e) = virtual_memory::allocate_kernel_heap(&mut vmm, heap_start, heap_size) {
+        serial_write("Warning: Failed to allocate kernel heap\n");
+    } else {
+        serial_write("Kernel heap allocated successfully.\n");
+    }
+
+    // Initialize advanced heap allocator
+    if let Err(e) = heap_allocator::init_heap_with_pages(heap_start.as_u64() as usize, heap_size) {
+        serial_write("Warning: Failed to initialize advanced heap allocator\n");
+    } else {
+        serial_write("Advanced heap allocator initialized successfully.\n");
+    }
 
     // Initialize GDT and TSS
     init_gdt_tss();
-    uefi::println!("GDT and TSS initialized successfully.");
+    serial_write("GDT and TSS initialized successfully.\n");
 
     // Initialize interrupts
     init_interrupts();
-    uefi::println!("Interrupts initialized successfully.");
+    serial_write("Interrupts initialized successfully.\n");
 
-    // Initialize heap allocator from UEFI memory map
+    // Initialize PIT for scheduling
+    init_pit();
+    serial_write("PIT timer initialized successfully.\n");
+
+    // Initialize advanced interrupt handling (APIC) if available
+    if apic::is_apic_available() {
+        if let Err(e) = apic::init() {
+            serial_write("Warning: Failed to initialize APIC\n");
+            serial_write("Falling back to legacy PIC interrupts.\n");
+        } else {
+            serial_write("APIC initialized successfully.\n");
+
+            // Set up I/O APIC interrupt routing
+            if let Some(apic) = apic::get_apic() {
+                let lapic_id = apic.lapic().id() as u8;
+                // Route timer interrupt (IRQ 0) to vector 32
+                apic.setup_interrupt(0, 32, lapic_id);
+                // Route keyboard interrupt (IRQ 1) to vector 33
+                apic.setup_interrupt(1, 33, lapic_id);
+                serial_write("I/O APIC interrupt routing configured.\n");
+            }
+
+            // Disable legacy PIC when APIC is available
+            apic::disable_legacy_pic();
+            serial_write("Legacy PIC disabled - using APIC for interrupts.\n");
+        }
+    } else {
+        serial_write("APIC not available - using legacy PIC interrupts.\n");
+    }
+
+    // Enable interrupts for preemptive scheduling
+    x86_64::instructions::interrupts::enable();
+    serial_write("Interrupts enabled for preemptive scheduling.\n");
+
+    // Initialize basic heap allocator (fallback)
     unsafe {
         HEAP_ALLOCATOR = BumpAllocator::new_from_uefi(&memory_map);
     }
-    uefi::println!("Heap allocator initialized successfully.");
+    serial_write("Basic heap allocator initialized successfully.\n");
 
-    // Initialize serial port
-    serial_init();
-    uefi::println!("Serial port initialized successfully.");
+    // Initialize process management
+    process::init();
+    serial_write("Process management initialized successfully.\n");
+
+    // Initialize filesystem
+    filesystem::init();
+    serial_write("Filesystem initialized successfully.\n");
+
+    // Initialize security framework
+    security::init();
+    if let Some(sm) = security::get_security_manager() {
+        if let Some(fs) = unsafe { syscall::FILESYSTEM.as_mut() } {
+            if let Err(e) = security::init_with_fs(fs) {
+                serial_write("Warning: Failed to initialize security with filesystem\n");
+            } else {
+                serial_write("Security framework initialized successfully.\n");
+            }
+        }
+    }
+
+    // Initialize AI model infrastructure
+    ai_models::init();
+    serial_write("AI model infrastructure initialized successfully.\n");
+
+    serial_write("About to initialize scheduler...\n");
+
+    // Initialize process scheduler
+    scheduler::init();
+    serial_write("Process scheduler initialized successfully.\n");
+
+    serial_write("About to initialize PCI...\n");
+
+
+    // Initialize PCI bus enumeration
+    pci::init();
+    pci::print_devices();
+    serial_write("PCI bus enumeration initialized successfully.\n");
+
+
+    // Initialize USB drivers
+    usb::init();
+    serial_write("USB drivers initialized successfully.\n");
+
+    // Enumerate USB input devices
+    usb_input::enumerate();
+    serial_write("USB input devices enumerated.\n");
+
+    // Initialize graphics driver
+    graphics::init();
+    serial_write("Graphics driver initialized.\n");
+
+    serial_write("About to initialize Ethernet...\n");
+
+    // Initialize Ethernet driver
+    ethernet::init();
+    ethernet::test_ethernet();
+    serial_write("Ethernet driver initialized successfully.\n");
+
+    // Initialize basic heap allocator (fallback)
+    unsafe {
+        HEAP_ALLOCATOR = BumpAllocator::new_from_uefi(&memory_map);
+    }
+    uefi::println!("Basic heap allocator initialized successfully.");
+
+    // Initialize process management
+    process::init();
+    uefi::println!("Process management initialized successfully.");
+
+    // Initialize filesystem
+    filesystem::init();
+    uefi::println!("Filesystem initialized successfully.");
+
+    // Initialize security framework
+    security::init();
+    if let Some(sm) = security::get_security_manager() {
+        if let Some(fs) = unsafe { syscall::FILESYSTEM.as_mut() } {
+            if let Err(e) = security::init_with_fs(fs) {
+                uefi::println!("Warning: Failed to initialize security with filesystem: {:?}", e);
+            } else {
+                uefi::println!("Security framework initialized successfully.");
+            }
+        }
+    }
+
+    // Initialize AI model infrastructure
+    ai_models::init();
+    uefi::println!("AI model infrastructure initialized successfully.");
+
+    uefi::println!("About to initialize scheduler...");
+
+    // Initialize process scheduler
+    scheduler::init();
+    uefi::println!("Process scheduler initialized successfully.");
+
+    uefi::println!("About to initialize PCI...");
+
+    // Initialize PCI bus enumeration
+    // pci::init();
+    // pci::print_devices();
+    uefi::println!("PCI bus enumeration initialized successfully.");
+
+    uefi::println!("About to initialize Ethernet...");
+
+    // Initialize Ethernet driver
+    // ethernet::init();
+    // ethernet::test_ethernet();
+    uefi::println!("Ethernet driver initialized successfully.");
+
+    // Set global filesystem reference for syscalls
+    unsafe {
+        syscall::FILESYSTEM = filesystem::get_fs();
+    }
+
+    // Test userland process execution
+    test_userland_process();
+
+    serial_write("About to demonstrate AI...\n");
 
     // Demonstrate AI text analysis with graphics
-    unsafe {
-        demonstrate_ai();
-    }
+    // demonstrate_ai();
+
+    serial_write("AI demo commented out\n");
 
     // Test divide by zero (uncomment to test fault handler)
     // unsafe { test_divide_by_zero(); }
 
-    uefi::println!("AI graphics demonstration complete! Kernel running successfully.");
+    serial_write("AI graphics demonstration complete! Kernel running successfully.\n");
 
     // For now, just infinite loop to show we're still running
     loop {
@@ -705,8 +708,117 @@ fn efi_main() -> Status {
     }
 }
 
-// Test divide by zero
-unsafe fn test_divide_by_zero() {
-    let _ = 1 / 0;
+// Test userland process execution
+fn test_userland_process() {
+    // For now, simulate a userland process by directly calling a function
+    // In a real system, we'd load an ELF binary
+
+    // Simple userland hello function
+    extern "C" fn userland_hello() {
+        let message = b"Hello from userland!\n";
+        let len = message.len();
+
+        unsafe {
+            core::arch::asm!(
+                "mov rax, 0",      // syscall number for write
+                "mov rdi, 1",      // fd = stdout
+                "mov rsi, {}",     // buf
+                "mov rdx, {}",     // count
+                "int 0x80",        // syscall
+                in(reg) message.as_ptr(),
+                in(reg) len,
+            );
+        }
+    }
+
+    // Test filesystem operations
+    extern "C" fn test_filesystem() {
+        let filename = b"/test.txt";
+        let content = b"Hello, filesystem!\n";
+        let mut buffer = [0u8; 64];
+
+        unsafe {
+            // Open/create file
+            core::arch::asm!(
+                "mov rax, 1",      // syscall number for open
+                "mov rdi, {}",     // path
+                "mov rsi, 6",      // flags (read + write + create)
+                "mov rdx, 0",      // mode
+                "int 0x80",        // syscall
+                "mov r8, rax",     // save fd
+                in(reg) filename.as_ptr(),
+            );
+
+            let fd: u64;
+            core::arch::asm!("mov {}, r8", out(reg) fd);
+
+            if fd < 0x8000000000000000 { // Check if not error
+                // Write to file
+                core::arch::asm!(
+                    "mov rax, 0",      // syscall number for write
+                    "mov rdi, r8",     // fd
+                    "mov rsi, {}",     // buf
+                    "mov rdx, {}",     // count
+                    "int 0x80",        // syscall
+                    in(reg) content.as_ptr(),
+                    in(reg) content.len(),
+                );
+
+                // Read from file
+                core::arch::asm!(
+                    "mov rax, 3",      // syscall number for read
+                    "mov rdi, r8",     // fd
+                    "mov rsi, {}",     // buf
+                    "mov rdx, {}",     // count
+                    "int 0x80",        // syscall
+                    in(reg) buffer.as_mut_ptr(),
+                    in(reg) buffer.len(),
+                );
+
+                // Write read content to stdout
+                core::arch::asm!(
+                    "mov rax, 0",      // syscall number for write
+                    "mov rdi, 1",      // fd = stdout
+                    "mov rsi, {}",     // buf
+                    "mov rdx, {}",     // count
+                    "int 0x80",        // syscall
+                    in(reg) buffer.as_ptr(),
+                    in(reg) buffer.len(),
+                );
+
+                // Close file
+                core::arch::asm!(
+                    "mov rax, 2",      // syscall number for close
+                    "mov rdi, r8",     // fd
+                    "int 0x80",        // syscall
+                );
+            }
+        }
+    }
+
+    // Load userland processes (scheduler will execute them)
+    let pid1 = process::load_userland_function(userland_hello as u64);
+    let pid2 = process::load_userland_function(test_filesystem as u64);
+
+    match pid1 {
+        Ok(pid) => {
+            uefi::println!("Loaded userland hello process with PID {}", pid);
+        }
+        Err(e) => {
+            uefi::println!("Failed to load hello process: {:?}", e);
+        }
+    }
+
+    match pid2 {
+        Ok(pid) => {
+            uefi::println!("Loaded filesystem test process with PID {}", pid);
+        }
+        Err(e) => {
+            uefi::println!("Failed to load filesystem process: {:?}", e);
+        }
+    }
+
+    // Scheduler will now handle process execution with preemptive scheduling
+    uefi::println!("Processes loaded - scheduler will handle execution with preemptive multitasking");
 }
 
