@@ -10,7 +10,7 @@ use core::mem;
 pub type Pid = u32;
 
 /// Process state
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub enum ProcessState {
     Running,
     Ready,
@@ -19,7 +19,7 @@ pub enum ProcessState {
 }
 
 /// Basic process structure
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct Process {
     pub pid: Pid,
     pub state: ProcessState,
@@ -30,7 +30,7 @@ pub struct Process {
 }
 
 /// Memory region for a process
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct MemoryRegion {
     pub start: u64,
     pub size: usize,
@@ -38,7 +38,7 @@ pub struct MemoryRegion {
 }
 
 /// Memory permissions
-#[derive(Clone, Copy)]
+#[derive(Debug, Clone, Copy)]
 pub struct MemoryPermissions {
     pub read: bool,
     pub write: bool,
@@ -154,8 +154,8 @@ pub fn load_userland_function(entry_point: u64) -> ElfResult<Pid> {
 }
 
 /// Load a program segment into memory
-fn load_segment(process: &mut Process, ph: &ProgramHeader, binary: &[u8]) -> ElfResult<()> {
-    let vaddr = ph.p_vaddr;
+fn load_segment(_process: &mut Process, ph: &ProgramHeader, binary: &[u8]) -> ElfResult<()> {
+    let _vaddr = ph.p_vaddr;
     let mem_size = ph.p_memsz as usize;
     let file_size = ph.p_filesz as usize;
     let offset = ph.p_offset as usize;

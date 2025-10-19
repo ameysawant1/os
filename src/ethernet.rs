@@ -3,7 +3,12 @@
 //! Provides basic Ethernet networking capabilities.
 //! Foundation for implementing TCP/IP stack and network services.
 
+#![allow(static_mut_refs)]
+
 use crate::pci::{PciDevice, class_codes, network_subclasses};
+#[cfg(feature = "alloc")]
+use alloc::vec::Vec;
+use alloc::format;
 use core::ptr;
 
 /// E1000 Register Offsets
@@ -51,6 +56,7 @@ const E1000_RAH: usize = 0x5404;         // Receive Address High
 
 /// Receive Descriptor
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct RxDescriptor {
     buffer_addr: u64,    // Buffer address
     length: u16,         // Length
@@ -62,6 +68,7 @@ struct RxDescriptor {
 
 /// Transmit Descriptor
 #[repr(C)]
+#[derive(Clone, Copy)]
 struct TxDescriptor {
     buffer_addr: u64,    // Buffer address
     length: u16,         // Length
@@ -182,7 +189,7 @@ impl E1000Controller {
     fn read_mac_address(&mut self) -> Result<(), &'static str> {
         // Try to read from EEPROM
         for i in 0..3 {
-            let word = self.read_eeprom(i)?;
+            let word = self.read_eeprom(i as u32)?;
             self.mac_addr[i * 2] = (word & 0xFF) as u8;
             self.mac_addr[i * 2 + 1] = ((word >> 8) & 0xFF) as u8;
         }
@@ -328,10 +335,14 @@ impl E1000Controller {
         let icr = self.read_reg(E1000_ICR);
 
         if (icr & (1 << 6)) != 0 { // RXDMT0
-            // Receive interrupt
+            // Receive interrupt - collect all frames first
+            let mut frames = Vec::new();
             while let Some(frame) = self.receive_frame() {
-                // Process received frame
-                self.process_received_frame(frame);
+                frames.push(frame.to_vec()); // Copy the frame data
+            }
+            // Now process the frames
+            for frame in frames {
+                self.process_received_frame(&frame);
             }
         }
 

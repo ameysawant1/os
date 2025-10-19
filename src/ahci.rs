@@ -3,8 +3,11 @@
 //! Provides SATA disk access for storage operations.
 //! Enables reading/writing to SATA drives for filesystem expansion.
 
+#![allow(static_mut_refs)]
+
 use crate::pci::{PciDevice, class_codes, storage_subclasses};
 use core::ptr;
+use alloc::format;
 
 /// AHCI Controller Registers
 const AHCI_CAP: usize = 0x00;        // Host Capabilities
@@ -75,7 +78,8 @@ struct Prd {
 }
 
 /// AHCI Port
-struct AhciPort {
+#[derive(Clone, Copy)]
+pub struct AhciPort {
     port_base: u64,
     state: PortState,
     command_list: Option<u64>,
@@ -95,8 +99,8 @@ impl AhciPort {
     /// Check if port has a device
     fn probe(&mut self) {
         unsafe {
-            let ssts = ptr::read_volatile((self.port_base + PORT_SSTS) as *const u32);
-            let sig = ptr::read_volatile((self.port_base + PORT_SIG) as *const u32);
+            let ssts = ptr::read_volatile((self.port_base + PORT_SSTS as u64) as *const u32);
+            let sig = ptr::read_volatile((self.port_base + PORT_SIG as u64) as *const u32);
 
             // Check if device is present and detected
             let ipm = (ssts >> 8) & 0x0F;
@@ -119,7 +123,7 @@ impl AhciPort {
     fn start(&mut self) -> Result<(), &'static str> {
         unsafe {
             // Clear interrupts
-            ptr::write_volatile((self.port_base + PORT_IS) as *mut u32, 0xFFFFFFFF);
+            ptr::write_volatile((self.port_base + PORT_IS as u64) as *mut u32, 0xFFFFFFFF);
 
             // Allocate command list and FIS receive area
             // TODO: Proper memory allocation
@@ -128,20 +132,20 @@ impl AhciPort {
 
             if let (Some(cl), Some(fb)) = (self.command_list, self.fis_base) {
                 // Set command list base
-                ptr::write_volatile((self.port_base + PORT_CLB) as *mut u32, cl as u32);
-                ptr::write_volatile((self.port_base + PORT_CLBU) as *mut u32, (cl >> 32) as u32);
+                ptr::write_volatile((self.port_base + PORT_CLB as u64) as *mut u32, cl as u32);
+                ptr::write_volatile((self.port_base + PORT_CLBU as u64) as *mut u32, (cl >> 32) as u32);
 
                 // Set FIS base
-                ptr::write_volatile((self.port_base + PORT_FB) as *mut u32, fb as u32);
-                ptr::write_volatile((self.port_base + PORT_FBU) as *mut u32, (fb >> 32) as u32);
+                ptr::write_volatile((self.port_base + PORT_FB as u64) as *mut u32, fb as u32);
+                ptr::write_volatile((self.port_base + PORT_FBU as u64) as *mut u32, (fb >> 32) as u32);
 
                 // Enable FIS receive
-                let cmd = ptr::read_volatile((self.port_base + PORT_CMD) as *const u32);
-                ptr::write_volatile((self.port_base + PORT_CMD) as *mut u32, cmd | (1 << 4));
+                let cmd = ptr::read_volatile((self.port_base + PORT_CMD as u64) as *const u32);
+                ptr::write_volatile((self.port_base + PORT_CMD as u64) as *mut u32, cmd | (1 << 4));
 
                 // Enable command engine
-                let cmd = ptr::read_volatile((self.port_base + PORT_CMD) as *const u32);
-                ptr::write_volatile((self.port_base + PORT_CMD) as *mut u32, cmd | (1 << 0));
+                let cmd = ptr::read_volatile((self.port_base + PORT_CMD as u64) as *const u32);
+                ptr::write_volatile((self.port_base + PORT_CMD as u64) as *mut u32, cmd | (1 << 0));
             }
         }
 
@@ -152,17 +156,17 @@ impl AhciPort {
     fn stop(&mut self) {
         unsafe {
             // Disable command engine
-            let cmd = ptr::read_volatile((self.port_base + PORT_CMD) as *const u32);
-            ptr::write_volatile((self.port_base + PORT_CMD) as *mut u32, cmd & !(1 << 0));
+            let cmd = ptr::read_volatile((self.port_base + PORT_CMD as u64) as *const u32);
+            ptr::write_volatile((self.port_base + PORT_CMD as u64) as *mut u32, cmd & !(1 << 0));
 
             // Disable FIS receive
-            let cmd = ptr::read_volatile((self.port_base + PORT_CMD) as *const u32);
-            ptr::write_volatile((self.port_base + PORT_CMD) as *mut u32, cmd & !(1 << 4));
+            let cmd = ptr::read_volatile((self.port_base + PORT_CMD as u64) as *const u32);
+            ptr::write_volatile((self.port_base + PORT_CMD as u64) as *mut u32, cmd & !(1 << 4));
         }
     }
 
     /// Read sectors from disk
-    fn read_sectors(&self, start_sector: u64, sector_count: u8, buffer: &mut [u8]) -> Result<(), &'static str> {
+    pub fn read_sectors(&self, _start_sector: u64, _sector_count: u8, _buffer: &mut [u8]) -> Result<(), &'static str> {
         if !matches!(self.state, PortState::Active) {
             return Err("No active SATA device");
         }
@@ -178,7 +182,7 @@ impl AhciPort {
     }
 
     /// Write sectors to disk
-    fn write_sectors(&self, start_sector: u64, sector_count: u8, buffer: &[u8]) -> Result<(), &'static str> {
+    pub fn write_sectors(&self, _start_sector: u64, _sector_count: u8, _buffer: &[u8]) -> Result<(), &'static str> {
         if !matches!(self.state, PortState::Active) {
             return Err("No active SATA device");
         }
@@ -223,22 +227,22 @@ impl AhciController {
     fn initialize(&mut self) -> Result<(), &'static str> {
         unsafe {
             // Reset controller
-            let ghc = ptr::read_volatile((self.base_addr + AHCI_GHC) as *const u32);
-            ptr::write_volatile((self.base_addr + AHCI_GHC) as *mut u32, ghc | (1 << 31)); // HBA reset
+            let ghc = ptr::read_volatile((self.base_addr + AHCI_GHC as u64) as *const u32);
+            ptr::write_volatile((self.base_addr + AHCI_GHC as u64) as *mut u32, ghc | (1 << 31)); // HBA reset
 
             // Wait for reset to complete
             loop {
-                let ghc = ptr::read_volatile((self.base_addr + AHCI_GHC) as *const u32);
+                let ghc = ptr::read_volatile((self.base_addr + AHCI_GHC as u64) as *const u32);
                 if (ghc & (1 << 31)) == 0 {
                     break;
                 }
             }
 
             // Enable AHCI
-            ptr::write_volatile((self.base_addr + AHCI_GHC) as *mut u32, 1 << 31);
+            ptr::write_volatile((self.base_addr + AHCI_GHC as u64) as *mut u32, 1 << 31);
 
             // Get implemented ports
-            let pi = ptr::read_volatile((self.base_addr + AHCI_PI) as *const u32);
+            let pi = ptr::read_volatile((self.base_addr + AHCI_PI as u64) as *const u32);
 
             // Initialize ports
             for i in 0..32 {

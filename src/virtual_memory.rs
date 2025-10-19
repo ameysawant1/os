@@ -42,7 +42,7 @@ impl VirtualMemoryManager {
         unsafe impl FrameAllocator<Size4KiB> for TempFrameAllocator {
             fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
                 crate::frame_allocator::allocate_frame()
-                    .map(|f| PhysFrame::from_start_address(f.start).unwrap())
+                    .map(|f| PhysFrame::from_start_address(PhysAddr::new(f.start.as_u64())).unwrap())
             }
         }
 
@@ -57,8 +57,9 @@ impl VirtualMemoryManager {
 
     /// Unmap a page
     pub fn unmap_page(&mut self, page: Page) -> Result<(), &'static str> {
-        self.mapper.unmap(page)
+        let (_frame, flush) = self.mapper.unmap(page)
             .map_err(|_| "Failed to unmap page")?;
+        flush.flush();
         Ok(())
     }
 
@@ -70,7 +71,7 @@ impl VirtualMemoryManager {
     /// Allocate and map a page
     pub fn allocate_page(&mut self, flags: PageTableFlags) -> Result<Page, &'static str> {
         let frame = crate::frame_allocator::allocate_frame()
-            .map(|f| PhysFrame::from_start_address(f.start).unwrap())
+            .map(|f| PhysFrame::from_start_address(PhysAddr::new(f.start.as_u64())).unwrap())
             .ok_or("No free frames available")?;
         let page = Page::containing_address(VirtAddr::new(frame.start_address().as_u64()));
 
@@ -140,8 +141,9 @@ pub fn allocate_kernel_heap(
 
     for i in 0..num_pages {
         let page = start_page + i as u64;
-        let frame = vmm.frame_allocator.allocate_frame()
+        let frame_addr = crate::frame_allocator::allocate_frame()
             .ok_or("No free frames for heap")?;
+        let frame = PhysFrame::from_start_address(PhysAddr::new(frame_addr.start.as_u64())).unwrap();
 
         let flags = PageTableFlags::PRESENT | PageTableFlags::WRITABLE;
         vmm.map_page(page, frame, flags)?;

@@ -1,3 +1,5 @@
+#![allow(static_mut_refs)]
+
 /// Input event structure for userland
 #[derive(Debug, Clone, Copy)]
 pub enum InputEvent {
@@ -31,12 +33,13 @@ pub fn pop_event() -> Option<InputEvent> {
         }
     }
 }
-//! USB Input Device Driver (Keyboard/Mouse)
-//!
-//! Enumerates USB devices and provides basic input event handling.
+// USB Input Device Driver (Keyboard/Mouse)
+//
+// Enumerates USB devices and provides basic input event handling.
 
 use crate::usb::{UsbController, UsbControllerType, get_controllers};
 use crate::serial_write;
+use alloc::format;
 
 /// USB Input Device Types
 #[derive(Debug, Clone, Copy)]
@@ -47,6 +50,7 @@ pub enum UsbInputType {
 }
 
 /// USB Input Device
+#[derive(Clone, Copy)]
 pub struct UsbInputDevice {
     pub controller: UsbController,
     pub input_type: UsbInputType,
@@ -86,7 +90,7 @@ pub fn enumerate() {
                     // 3. Set address (simulate)
                     let address = 1; // Normally assigned by controller
                     // 4. Get configuration descriptor (simulate)
-                    let config_desc = get_config_descriptor(ctrl.base_addr);
+                    let _config_desc = get_config_descriptor(ctrl.base_addr);
                     // 5. Detect device type
                     let input_type = match device_desc.interface_class {
                         0x03 => UsbInputType::Keyboard, // HID
@@ -118,7 +122,7 @@ struct UsbDeviceDescriptor {
 
 
 /// Real USB transfer: setup, IN, OUT, polling
-fn usb_control_transfer(base_addr: u64, request: &[u8], data: &mut [u8]) -> bool {
+fn usb_control_transfer(_base_addr: u64, _request: &[u8], _data: &mut [u8]) -> bool {
     // TODO: Implement real USB control transfer using UHCI/EHCI/XHCI registers
     // For now, simulate success
     true

@@ -3,10 +3,46 @@
 //! Implements round-robin scheduling with context switching.
 //! Manages process states, time slices, and CPU time allocation.
 
-use core::collections::VecDeque;
-use crate::process::{Process, ProcessState};
+use alloc::collections::VecDeque;
+use crate::process::Process;
 use x86_64::structures::idt::InterruptStackFrame;
 use spin::Mutex;
+use core::arch::asm;
+
+#[cfg(feature = "alloc")]
+type ContextSwitchReason = crate::execution_journal::ContextSwitchReason;
+#[cfg(not(feature = "alloc"))]
+#[derive(Debug, Clone, Copy)]
+enum ContextSwitchReason {
+    TimeSliceExpired,
+    Yield,
+    Sleep,
+    WaitForIO,
+    Terminated,
+}
+
+#[cfg(feature = "alloc")]
+fn record_context_switch(
+    from_process: u32,
+    to_process: u32,
+    from_thread: u32,
+    to_thread: u32,
+    reason: ContextSwitchReason,
+) {
+    if let Some(journal) = crate::execution_journal::get_journal() {
+        let _ = journal.record_context_switch(from_process, to_process, from_thread, to_thread, reason);
+    }
+}
+
+#[cfg(not(feature = "alloc"))]
+fn record_context_switch(
+    _from_process: u32,
+    _to_process: u32,
+    _from_thread: u32,
+    _to_thread: u32,
+    _reason: ContextSwitchReason,
+) {
+}
 
 /// Process states for scheduling
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -65,30 +101,70 @@ impl Scheduler {
     pub fn schedule(&mut self) -> Option<&mut ProcessControlBlock> {
         self.time_slice_counter += 1;
 
-        // Check if current process needs to be preempted
-        if let Some(current_idx) = self.current_process {
-            if let Some(current_pcb) = self.processes.get_mut(current_idx) {
-                current_pcb.time_slice = current_pcb.time_slice.saturating_sub(1);
-                current_pcb.total_runtime += 1;
+        let mut from_process = 0;
+        let mut to_process = 0;
+        let mut from_thread = 0;
+        let mut to_thread = 0;
+        let mut reason = crate::execution_journal::ContextSwitchReason::TimeSliceExpired;
 
-                // Time slice expired or process blocked
-                if current_pcb.time_slice == 0 || current_pcb.state != SchedulerState::Running {
-                    current_pcb.state = SchedulerState::Ready;
-                    self.current_process = None;
+        // Check if current process needs to be preempted
+        let expired = if let Some(idx) = self.current_process {
+            let pcb = &self.processes[idx];
+            pcb.time_slice == 0 || pcb.state != SchedulerState::Running
+        } else {
+            true
+        };
+
+        if !expired {
+            let idx = self.current_process.unwrap();
+            let current_pcb = &mut self.processes[idx];
+            current_pcb.time_slice = current_pcb.time_slice.saturating_sub(1);
+            current_pcb.total_runtime += 1;
+            from_process = current_pcb.process.pid;
+            from_thread = 0; // Single-threaded for now
+            return Some(current_pcb);
+        } else {
+            // Current process expired or blocked
+            if let Some(idx) = self.current_process {
+                let current_pcb = &mut self.processes[idx];
+                if current_pcb.time_slice == 0 {
+                    reason = crate::execution_journal::ContextSwitchReason::TimeSliceExpired;
+                } else if current_pcb.state == SchedulerState::Blocked {
+                    reason = crate::execution_journal::ContextSwitchReason::WaitForIO;
                 } else {
-                    // Keep running current process
-                    return Some(current_pcb);
+                    reason = crate::execution_journal::ContextSwitchReason::Yield;
                 }
+                current_pcb.state = SchedulerState::Ready;
+                from_process = current_pcb.process.pid;
+                from_thread = 0;
             }
+            self.current_process = None;
         }
 
         // Find next ready process
         for (i, pcb) in self.processes.iter_mut().enumerate() {
             if pcb.state == SchedulerState::Ready {
+                to_process = pcb.process.pid;
+                to_thread = 0; // Single-threaded for now
+
                 pcb.state = SchedulerState::Running;
                 pcb.time_slice = DEFAULT_TIME_SLICE;
                 self.current_process = Some(i);
+
+                // Record context switch in execution journal
+                if let Some(journal) = crate::execution_journal::get_journal() {
+                    let _ = journal.record_context_switch(from_process, to_process, from_thread, to_thread, reason);
+                }
+
                 return Some(pcb);
+            }
+        }
+
+        // No ready processes - record that we're switching to idle
+        if from_process != 0 {
+            // Record switch to idle
+            if let Some(journal) = crate::execution_journal::get_journal() {
+                let _ = journal.record_context_switch(from_process, 0, from_thread, 0, crate::execution_journal::ContextSwitchReason::Terminated);
             }
         }
 
@@ -189,7 +265,6 @@ pub struct Context {
 }
 
 /// Save current context
-#[naked]
 pub unsafe extern "C" fn save_context(_context: *mut Context) {
     asm!(
         "mov [rdi + 0*8], rax",
@@ -223,7 +298,7 @@ pub unsafe extern "C" fn save_context(_context: *mut Context) {
 }
 
 /// Restore context
-#[naked]
+
 pub unsafe extern "C" fn restore_context(_context: *const Context) {
     asm!(
         "mov rax, [rdi + 0*8]",
@@ -266,7 +341,7 @@ pub extern "x86-interrupt" fn timer_handler(_stack_frame: InterruptStackFrame) {
     } else {
         // Fall back to legacy PIC
         unsafe {
-            crate::pic8259::PICS.lock().notify_end_of_interrupt(32);
+            (&mut *core::ptr::addr_of_mut!(crate::PICS)).notify_end_of_interrupt(32);
         }
     }
 }
@@ -279,7 +354,7 @@ pub fn yield_current() {
 }
 
 /// Sleep current process for specified ticks
-pub fn sleep_current(ticks: u32) {
+pub fn sleep_current(_ticks: u32) {
     // TODO: Implement timer-based wakeups
     if let Some(scheduler) = get_scheduler().lock().as_mut() {
         scheduler.block_current();

@@ -2,7 +2,11 @@
 //!
 //! Foundation for USB keyboard, mouse, and storage support.
 
-use crate::pci::{PciDevice, class_codes, serial_write};
+#![allow(static_mut_refs)]
+
+use crate::pci::{PciDevice, class_codes};
+use crate::serial_write;
+use alloc::format;
 
 /// USB Controller Types
 #[derive(Debug, Clone, Copy)]
@@ -14,6 +18,7 @@ pub enum UsbControllerType {
 }
 
 /// USB Controller
+#[derive(Clone, Copy)]
 pub struct UsbController {
     pub pci_device: PciDevice,
     pub controller_type: UsbControllerType,

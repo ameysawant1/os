@@ -3,7 +3,10 @@
 //! Provides PCI bus enumeration, device discovery, and driver management.
 //! Foundation for storage, network, and other PCI device drivers.
 
+#![allow(static_mut_refs)]
+
 use core::ptr;
+use alloc::format;
 
 /// PCI Configuration Space Registers
 const PCI_CONFIG_ADDRESS: u16 = 0xCF8;
@@ -144,7 +147,7 @@ impl PciScanner {
 
     /// Scan all PCI buses and devices
     pub fn scan(&mut self) {
-        for bus in 0..256u8 {
+        for bus in 0..=255u8 {
             for device in 0..32u8 {
                 // Check function 0 first
                 if let Some(pci_device) = self.probe_device(bus, device, 0) {
@@ -289,6 +292,7 @@ pub mod class_codes {
     pub const DOCKING: u8 = 0x0A;
     pub const PROCESSOR: u8 = 0x0B;
     pub const SERIAL: u8 = 0x0C;
+    pub const SERIAL_BUS: u8 = 0x0C;
     pub const WIRELESS: u8 = 0x0D;
     pub const INTELLIGENT_IO: u8 = 0x0E;
     pub const SATELLITE: u8 = 0x0F;

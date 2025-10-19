@@ -36,7 +36,7 @@ where
 {
     let page_range = {
         let heap_start = VirtAddr::new(HEAP_START as u64);
-        let heap_end = heap_start + HEAP_SIZE - 1u64;
+        let heap_end = heap_start + HEAP_SIZE as u64 - 1u64;
         let heap_start_page = Page::containing_address(heap_start);
         let heap_end_page = Page::containing_address(heap_end);
         Page::range_inclusive(heap_start_page, heap_end_page)
@@ -58,7 +58,8 @@ where
 
 /// Get heap usage statistics
 pub fn heap_usage() -> (usize, usize) {
-    ALLOCATOR.lock().used() // Returns (used, total)
+    let used = ALLOCATOR.lock().used();
+    (used, HEAP_SIZE)
 }
 
 /// Test the allocator with some allocations

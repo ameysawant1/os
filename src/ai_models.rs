@@ -3,12 +3,35 @@
 //! Initial implementation with TF-IDF for text analysis.
 //! Prepares foundation for future quantized models and ggml-based LLM runtimes.
 
-use core::collections::BTreeMap;
+#![allow(dead_code)]
+
+#[cfg(feature = "alloc")]
+#[cfg(feature = "alloc")]
+use alloc::collections::BTreeMap;
+#[cfg(feature = "alloc")]
+use alloc::string::ToString;
+#[cfg(feature = "alloc")]
+use alloc::boxed::Box;
 #[cfg(feature = "alloc")]
 use alloc::string::String;
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
+#[cfg(feature = "alloc")]
+use alloc::{format, vec};
 
+/// Trait for AI models
+pub trait AIModel {
+    /// Get model gradients for federated learning
+    fn get_gradients(&self) -> Vec<f32>;
+    /// Apply aggregated gradients
+    fn apply_gradients(&mut self, gradients: &[f32]);
+    /// Get sample count for this round
+    fn get_sample_count(&self) -> u32;
+    /// Get model identifier
+    fn model_id(&self) -> u32;
+}
+
+#[cfg(feature = "alloc")]
 /// Simple TF-IDF vectorizer for text analysis
 pub struct TfidfVectorizer {
     vocabulary: BTreeMap<String, usize>,
@@ -16,6 +39,7 @@ pub struct TfidfVectorizer {
     max_features: usize,
 }
 
+#[cfg(feature = "alloc")]
 impl TfidfVectorizer {
     /// Create a new TF-IDF vectorizer
     pub fn new(max_features: usize) -> Self {
@@ -73,7 +97,11 @@ impl TfidfVectorizer {
         }
 
         for score in &mut self.idf_scores {
-            *score = (num_docs / *score).ln() + 1.0; // Add 1 for smoothing
+            if *score > 0.0 {
+                *score = num_docs / *score; // Simplified IDF calculation
+            } else {
+                *score = 1.0; // Avoid division by zero
+            }
         }
     }
 
@@ -113,6 +141,7 @@ impl TfidfVectorizer {
     }
 }
 
+#[cfg(feature = "alloc")]
 /// Simple text classifier using TF-IDF features
 pub struct TextClassifier {
     vectorizer: TfidfVectorizer,
@@ -120,6 +149,7 @@ pub struct TextClassifier {
     bias: f32,
 }
 
+#[cfg(feature = "alloc")]
 impl TextClassifier {
     /// Create a new text classifier
     pub fn new(max_features: usize) -> Self {
@@ -167,16 +197,70 @@ impl TextClassifier {
                 score += weight * features[i];
             }
         }
-        // Simple sigmoid activation
-        1.0 / (1.0 + (-score).exp())
+        // Simple sigmoid approximation (simplified for no_std)
+        if score > 0.0 {
+            1.0 / (1.0 + (-score).max(-10.0).min(10.0)) // Clamp to avoid overflow
+        } else {
+            0.5 // Default for zero score
+        }
+    }
+
+    /// Get current model gradients for federated learning
+    pub fn get_gradients(&self) -> Vec<f32> {
+        // Return current weights as gradients (simplified)
+        let mut gradients = self.weights.clone();
+        gradients.push(self.bias); // Include bias
+        gradients
+    }
+
+    /// Apply aggregated gradients from federated learning
+    pub fn apply_gradients(&mut self, gradients: &[f32]) {
+        // Simple gradient descent update
+        let learning_rate = 0.01;
+        for (i, &grad) in gradients.iter().enumerate() {
+            if i < self.weights.len() {
+                self.weights[i] -= grad * learning_rate;
+            } else if i == self.weights.len() {
+                self.bias -= grad * learning_rate;
+            }
+        }
+    }
+
+    /// Get sample count for this training round
+    pub fn get_sample_count(&self) -> u32 {
+        // Return number of training samples processed
+        // This is a placeholder - in a real implementation,
+        // this would track actual sample counts
+        100
     }
 }
 
-/// Model manager for versioned AI models
-pub struct ModelManager {
-    models: BTreeMap<String, Box<dyn AIModel>>,
+#[cfg(feature = "alloc")]
+impl AIModel for TextClassifier {
+    fn get_gradients(&self) -> Vec<f32> {
+        self.get_gradients()
+    }
+
+    fn apply_gradients(&mut self, gradients: &[f32]) {
+        self.apply_gradients(gradients);
+    }
+
+    fn get_sample_count(&self) -> u32 {
+        self.get_sample_count()
+    }
+
+    fn model_id(&self) -> u32 {
+        1 // Text classification model ID
+    }
 }
 
+#[cfg(feature = "alloc")]
+/// Model manager for versioned AI models
+pub struct ModelManager {
+    models: BTreeMap<String, Box<dyn ProcessingAIModel>>,
+}
+
+#[cfg(feature = "alloc")]
 impl ModelManager {
     pub fn new() -> Self {
         ModelManager {
@@ -185,13 +269,13 @@ impl ModelManager {
     }
 
     /// Register a model with a version
-    pub fn register_model(&mut self, name: String, version: String, model: Box<dyn AIModel>) {
+    pub fn register_model(&mut self, name: String, version: String, model: Box<dyn ProcessingAIModel>) {
         let key = format!("{}:{}", name, version);
         self.models.insert(key, model);
     }
 
     /// Get a model by name and version
-    pub fn get_model(&self, name: &str, version: &str) -> Option<&Box<dyn AIModel>> {
+    pub fn get_model(&self, name: &str, version: &str) -> Option<&Box<dyn ProcessingAIModel>> {
         let key = format!("{}:{}", name, version);
         self.models.get(&key)
     }
@@ -203,17 +287,20 @@ impl ModelManager {
 }
 
 /// Trait for AI models
-pub trait AIModel {
+#[cfg(feature = "alloc")]
+pub trait ProcessingAIModel {
     /// Process input and return result
     fn process(&self, input: &str) -> String;
 }
 
 /// Example TF-IDF based text classifier model
+#[cfg(feature = "alloc")]
 pub struct TfidfClassifierModel {
     classifier: TextClassifier,
     categories: Vec<String>,
 }
 
+#[cfg(feature = "alloc")]
 impl TfidfClassifierModel {
     pub fn new(classifier: TextClassifier, categories: Vec<String>) -> Self {
         TfidfClassifierModel {
@@ -223,11 +310,41 @@ impl TfidfClassifierModel {
     }
 }
 
-impl AIModel for TfidfClassifierModel {
+#[cfg(feature = "alloc")]
+impl ProcessingAIModel for TfidfClassifierModel {
     fn process(&self, input: &str) -> String {
         let score = self.classifier.predict(input);
         let category_idx = if score > 0.5 { 1 } else { 0 };
-        self.categories.get(category_idx).unwrap_or(&"unknown".to_string()).clone()
+        self.categories.get(category_idx).cloned().unwrap_or_else(|| "unknown".to_string())
+    }
+}
+
+#[cfg(feature = "alloc")]
+impl TfidfClassifierModel {
+    pub fn get_gradients(&self) -> Vec<f32> {
+        // Return current weights as gradients (simplified)
+        let mut gradients = self.classifier.weights.clone();
+        gradients.push(self.classifier.bias); // Include bias
+        gradients
+    }
+
+    pub fn apply_gradients(&mut self, gradients: &[f32]) {
+        // Apply gradients to weights (simplified)
+        let bias_idx = self.classifier.weights.len();
+        if gradients.len() > bias_idx {
+            self.classifier.weights.copy_from_slice(&gradients[..bias_idx]);
+            self.classifier.bias = gradients[bias_idx];
+        }
+    }
+
+    pub fn get_sample_count(&self) -> u32 {
+        // Return a fixed sample count for now
+        100
+    }
+
+    pub fn model_id(&self) -> u32 {
+        // Return a fixed model ID
+        1
     }
 }
 
@@ -238,7 +355,7 @@ pub fn init() {
 }
 
 /// Test AI functionality
-#[cfg(test)]
+#[cfg(all(test, feature = "alloc"))]
 pub fn test_ai() {
     let documents = [
         "This is a technical document about programming",

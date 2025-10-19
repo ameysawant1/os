@@ -3,6 +3,8 @@
 //! Implements APIC (Advanced Programmable Interrupt Controller) support for:
 //! - Local APIC (LAPIC) for per-CPU interrupts
 //! - I/O APIC for external device interrupts
+
+#![allow(static_mut_refs)]
 //! - MSI/MSI-X support for modern PCI devices
 //! - SMP (Symmetric Multi-Processing) support
 
@@ -132,6 +134,7 @@ impl LocalApic {
 }
 
 /// I/O APIC structure
+#[derive(Clone, Copy)]
 pub struct IoApic {
     base_addr: u64,
     id: u8,
@@ -175,7 +178,7 @@ impl IoApic {
         }
 
         let mut low = vector as u32;
-        let mut high = (apic_id as u32) << 24;
+        let high = (apic_id as u32) << 24;
 
         // Set trigger mode and polarity
         if level_triggered {
@@ -287,7 +290,7 @@ impl AdvancedPic {
     /// Send End of Interrupt
     pub fn notify_end_of_interrupt(&self, vector: u8) {
         // For LAPIC interrupts, send EOI
-        if vector >= 32 && vector <= 255 {
+        if vector >= 32 {
             self.lapic.send_eoi();
         }
     }

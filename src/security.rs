@@ -3,12 +3,18 @@
 //! Implements non-negotiable security requirements:
 //! - Local-first models with explicit cloud opt-in
 //! - Human-in-loop for kernel/driver/model hotpatches
+
+#![allow(static_mut_refs)]
 //! - Immutable audit trail for all operations
 //! - Kill-switch for AI autonomy
 //! - PII redaction for off-device exports
 
-use crate::filesystem::{Filesystem, FsError, FileDescriptor, OpenFlags, InodeNum};
-use core::fmt;
+#[cfg(feature = "alloc")]
+extern crate alloc;
+
+use crate::filesystem::{Filesystem, FsError, FileDescriptor, OpenFlags};
+#[cfg(feature = "alloc")]
+use alloc::string::String;
 
 /// Security policy levels
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -196,8 +202,8 @@ impl SecurityManager {
     /// Enable/disable AI autonomy
     pub fn set_autonomy(&mut self, enabled: bool, user_id: u32) -> Result<(), &'static str> {
         self.autonomy_enabled = enabled;
-        let msg = if enabled { b"AI autonomy enabled" } else { b"AI autonomy disabled" };
-        self.audit_log(OperationType::AutonomyControl, user_id, true, msg)?;
+        let msg = if enabled { "AI autonomy enabled" } else { "AI autonomy disabled" };
+        self.audit_log(OperationType::AutonomyControl, user_id, true, msg.as_bytes()).map_err(|_| "audit log failed")?;
         Ok(())
     }
 
@@ -205,7 +211,7 @@ impl SecurityManager {
     pub fn kill_switch(&mut self, user_id: u32) -> Result<(), &'static str> {
         self.policy.autonomy_kill_switch = true;
         self.autonomy_enabled = false;
-        self.audit_log(OperationType::AutonomyControl, user_id, true, b"Kill switch activated")?;
+        self.audit_log(OperationType::AutonomyControl, user_id, true, "Kill switch activated".as_bytes()).map_err(|_| "audit log failed")?;
         Ok(())
     }
 

@@ -20,9 +20,10 @@ pub fn draw_window(win: &Window) {
         }
     }
 }
-//! Graphics Driver (VGA/GOP/Framebuffer)
-//!
-//! Provides basic framebuffer and graphics primitives for GUI support.
+
+// Graphics Driver (VGA/GOP/Framebuffer)
+//
+// Provides basic framebuffer and graphics primitives for GUI support.
 
 use crate::serial_write;
 

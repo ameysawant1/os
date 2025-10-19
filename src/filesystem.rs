@@ -6,7 +6,10 @@
 //! - Copy-on-write snapshots for rollback
 //! - Block device abstraction for storage backends
 
-use crate::frame_allocator::{PhysAddr, Frame, allocate_frame, deallocate_frame};
+use crate::frame_allocator::PhysAddr;
+#[cfg(feature = "alloc")]
+use alloc::boxed::Box;
+use alloc::alloc::alloc;
 use core::mem;
 
 /// Block device trait for storage backends
@@ -33,7 +36,7 @@ struct MemoryBlockDevice {
 impl MemoryBlockDevice {
     fn new(total_blocks: BlockNum) -> Self {
         let layout = core::alloc::Layout::array::<[u8; BLOCK_SIZE]>(total_blocks as usize).unwrap();
-        let blocks = unsafe { core::alloc::alloc(layout) as *mut [u8; BLOCK_SIZE] };
+        let blocks = unsafe { alloc(layout) as *mut [u8; BLOCK_SIZE] };
         
         // Initialize to zero
         unsafe {
@@ -258,7 +261,7 @@ impl Filesystem {
         // Try to use AHCI block device first, fall back to memory
         let block_device: &'static dyn BlockDevice = if let Some(ahci) = AhciBlockDevice::new() {
             crate::serial_write("Using AHCI block device for filesystem\n");
-            &ahci
+            Box::leak(Box::new(ahci))
         } else {
             crate::serial_write("Using memory block device for filesystem\n");
             // For now, create an in-memory filesystem
@@ -276,7 +279,7 @@ impl Filesystem {
         // Allocate frames for bitmaps and inodes
         let inode_bitmap_frames = (total_inodes + 4095) / 4096;
         let block_bitmap_frames = (total_blocks + 4095) / 4096;
-        let inode_table_frames = (total_inodes * mem::size_of::<Inode>() + 4095) / 4096;
+        let _inode_table_frames = (total_inodes * mem::size_of::<Inode>() + 4095) / 4096;
 
         // For simplicity, use fixed addresses (would use frame allocator in real impl)
         let inode_bitmap_start = PhysAddr::new(0x1000000); // 16MB
@@ -450,34 +453,6 @@ impl Filesystem {
         }
 
         Ok(copy_len)
-    }
-
-    /// Create snapshot (copy-on-write)
-    pub fn create_snapshot(&mut self) -> Result<InodeNum, FsError> {
-        // For simplicity, just create a new root inode that shares blocks
-        // In a real implementation, this would copy metadata and mark blocks as COW
-
-        let snapshot_inum = self.allocate_inode()?;
-        let snapshot_inode = Inode {
-            inum: snapshot_inum,
-            file_type: FileType::Directory,
-            size: self.inodes[self.superblock.root_inode as usize].size,
-            permissions: self.inodes[self.superblock.root_inode as usize].permissions,
-            uid: 0,
-            gid: 0,
-            atime: 0,
-            mtime: 0,
-            ctime: 0,
-            blocks: self.inodes[self.superblock.root_inode as usize].blocks,
-            indirect_block: self.inodes[self.superblock.root_inode as usize].indirect_block,
-            double_indirect_block: self.inodes[self.superblock.root_inode as usize].double_indirect_block,
-            triple_indirect_block: self.inodes[self.superblock.root_inode as usize].triple_indirect_block,
-        };
-
-        self.inodes[snapshot_inum as usize] = snapshot_inode;
-        self.current_snapshot = snapshot_inum;
-
-        Ok(snapshot_inum)
     }
 
     /// Allocate a free inode
@@ -807,6 +782,54 @@ impl Filesystem {
         self.block_bitmap[bitmap_index] &= !(1u64 << bit_index);
         self.superblock.free_blocks += 1;
         Ok(())
+    }
+
+    /// Create a filesystem snapshot for replay substrate
+    pub fn create_snapshot(&mut self) -> Result<InodeNum, FsError> {
+        // Allocate a new inode for the snapshot
+        let snapshot_inum = self.allocate_inode()?;
+
+        // Create snapshot inode that references the current root
+        let mut snapshot_inode = Inode {
+            inum: snapshot_inum,
+            file_type: FileType::Directory, // Snapshots are directory-like
+            size: 0, // Size doesn't matter for snapshots
+            permissions: Permissions { read: true, write: false, execute: false }, // Read-only
+            uid: 0,
+            gid: 0,
+            atime: 0, // Would be current time
+            mtime: 0, // Would be current time
+            ctime: 0, // Would be current time
+            blocks: [0; 12],
+            indirect_block: 0,
+            double_indirect_block: 0,
+            triple_indirect_block: 0,
+        };
+
+        // Set the first direct block to point to the current root inode
+        // This creates a reference to the filesystem state at snapshot time
+        snapshot_inode.blocks[0] = self.superblock.root_inode;
+
+        self.inodes[snapshot_inum as usize] = snapshot_inode;
+
+        // Update current snapshot pointer
+        self.current_snapshot = snapshot_inum;
+
+        Ok(snapshot_inum)
+    }
+
+    /// Get snapshot by ID
+    pub fn get_snapshot(&self, snapshot_id: InodeNum) -> Option<&Inode> {
+        if snapshot_id as usize >= self.inodes.len() {
+            return None;
+        }
+
+        let inode = &self.inodes[snapshot_id as usize];
+        if inode.inum == snapshot_id {
+            Some(inode)
+        } else {
+            None
+        }
     }
 }
 

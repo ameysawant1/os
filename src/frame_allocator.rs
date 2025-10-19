@@ -3,8 +3,13 @@
 //! Provides allocation and deallocation of physical memory frames using the UEFI memory map.
 //! Includes PhysAddr and VirtAddr types for type safety.
 
+#![allow(static_mut_refs)]
+
 use core::ops::{Add, Sub};
-use uefi::mem::memory_map::MemoryDescriptor;
+use core::mem::MaybeUninit;
+
+/// Global frame allocator instance
+static mut FRAME_ALLOCATOR: MaybeUninit<FrameAllocator> = MaybeUninit::uninit();
 
 /// Physical address type for type safety
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -266,35 +271,49 @@ impl FrameAllocator {
 /// Type alias for UEFI-compatible frame allocator
 pub type UEFIFrameAllocator = FrameAllocator;
 
-/// Initialize the global frame allocator
-pub fn init(memory_map: &dyn uefi::mem::memory_map::MemoryMap) {
+/// Initialize the global frame allocator (simplified for now)
+pub fn init() {
+    // For now, create a simple frame allocator that allocates from a fixed range
+    // This is a temporary implementation - in a real OS we'd use the UEFI memory map
+    let bitmap_size = 1024; // 1024 u64s = 8192 frames = 32MB
+    let bitmap_start = PhysAddr::new(0x1000); // Start after first 4KB (avoid very low memory)
+    
     unsafe {
-        FRAME_ALLOCATOR = FrameAllocator::new(memory_map);
+        let bitmap_ptr = bitmap_start.as_mut_ptr::<u64>();
+        // Initialize bitmap to all free
+        core::ptr::write_bytes(bitmap_ptr, 0, bitmap_size);
+        
+        let allocator = FrameAllocator {
+            bitmap: core::slice::from_raw_parts_mut(bitmap_ptr, bitmap_size),
+            bitmap_start_frame: Frame::containing_address(PhysAddr::new(0x2000)), // Start allocation after bitmap
+            total_frames: 8192,
+            used_frames: 0,
+        };
+        
+        FRAME_ALLOCATOR.write(allocator);
     }
 }
 
 /// Allocate a frame
 pub fn allocate_frame() -> Option<Frame> {
     unsafe {
-        let allocator = &mut *core::ptr::addr_of_mut!(FRAME_ALLOCATOR);
-        allocator.as_mut()?.allocate_frame()
+        let allocator = FRAME_ALLOCATOR.assume_init_mut();
+        allocator.allocate_frame()
     }
 }
 
 /// Deallocate a frame
 pub fn deallocate_frame(frame: Frame) {
     unsafe {
-        let allocator = &mut *core::ptr::addr_of_mut!(FRAME_ALLOCATOR);
-        if let Some(alloc) = allocator {
-            alloc.deallocate_frame(frame);
-        }
+        let allocator = FRAME_ALLOCATOR.assume_init_mut();
+        allocator.deallocate_frame(frame);
     }
 }
 
 /// Get allocator statistics
-pub fn stats() -> Option<(usize, usize)> {
+pub fn stats() -> (usize, usize) {
     unsafe {
-        let allocator = &*core::ptr::addr_of!(FRAME_ALLOCATOR);
-        allocator.as_ref().map(|a| a.stats())
+        let allocator = FRAME_ALLOCATOR.assume_init_ref();
+        allocator.stats()
     }
 }
