@@ -9,6 +9,7 @@
 use crate::pci::{PciDevice, class_codes, storage_subclasses};
 use core::ptr;
 use alloc::format;
+use crate::utils::serial_write;
 
 /// AHCI Controller Registers
 const AHCI_CAP: usize = 0x00;        // Host Capabilities
@@ -295,7 +296,7 @@ pub fn init() {
                     AHCI_CONTROLLER = Some(controller);
                     if let Some(ctrl) = AHCI_CONTROLLER.as_mut() {
                         if ctrl.start_ports().is_ok() {
-                            crate::serial_write("AHCI controller initialized successfully\n");
+                            serial_write("AHCI controller initialized successfully\n");
                         }
                     }
                 }
@@ -313,14 +314,14 @@ pub fn get_controller() -> Option<&'static mut AhciController> {
 /// Test AHCI functionality
 pub fn test_ahci() {
     if let Some(controller) = get_controller() {
-        crate::serial_write(&format!("AHCI controller has {} ports\n", controller.port_count()));
+        serial_write(&format!("AHCI controller has {} ports\n", controller.port_count()));
 
         for i in 0..controller.port_count() {
             if let Some(port) = controller.get_port(i) {
-                crate::serial_write(&format!("Port {}: {:?}\n", i, port.state));
+                serial_write(&format!("Port {}: {:?}\n", i, port.state));
             }
         }
     } else {
-        crate::serial_write("No AHCI controller found\n");
+        serial_write("No AHCI controller found\n");
     }
 }

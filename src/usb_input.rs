@@ -38,7 +38,7 @@ pub fn pop_event() -> Option<InputEvent> {
 // Enumerates USB devices and provides basic input event handling.
 
 use crate::usb::{UsbController, UsbControllerType, get_controllers};
-use crate::serial_write;
+use serial_write;
 use alloc::format;
 
 /// USB Input Device Types

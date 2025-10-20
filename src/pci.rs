@@ -8,6 +8,7 @@
 
 use core::ptr;
 use alloc::format;
+use crate::utils::serial_write;
 
 /// PCI Configuration Space Registers
 const PCI_CONFIG_ADDRESS: u16 = 0xCF8;
@@ -318,16 +319,16 @@ static mut PCI_SCANNER: Option<PciScanner> = None;
 
 /// Initialize PCI subsystem
 pub fn init() {
-    crate::serial_write("Initializing PCI bus enumeration...\n");
+    serial_write("Initializing PCI bus enumeration...\n");
     unsafe {
         PCI_SCANNER = Some(PciScanner::new());
-        crate::serial_write("PCI scanner created\n");
+        serial_write("PCI scanner created\n");
         if let Some(scanner) = PCI_SCANNER.as_mut() {
             scanner.scan();
-            crate::serial_write("PCI scan completed\n");
+            serial_write("PCI scan completed\n");
         }
     }
-    crate::serial_write("PCI initialization complete\n");
+    serial_write("PCI initialization complete\n");
 }
 
 /// Get PCI scanner instance
@@ -338,10 +339,10 @@ pub fn get_scanner() -> Option<&'static mut PciScanner> {
 /// Print PCI device information
 pub fn print_devices() {
     if let Some(scanner) = get_scanner() {
-        crate::serial_write("PCI Devices Found:\n");
+        serial_write("PCI Devices Found:\n");
         for i in 0..scanner.device_count() {
             if let Some(device) = scanner.get_device(i) {
-                crate::serial_write(&format!("  {:02x}:{:02x}.{:01x} {:04x}:{:04x} Class {:02x}:{:02x}:{:02x}\n",
+                serial_write(&format!("  {:02x}:{:02x}.{:01x} {:04x}:{:04x} Class {:02x}:{:02x}:{:02x}\n",
                     device.bus, device.device, device.function,
                     device.vendor_id, device.device_id,
                     device.class, device.subclass, device.prog_if));

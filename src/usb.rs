@@ -6,7 +6,7 @@
 #![allow(dead_code)]
 
 use crate::pci::{PciDevice, class_codes};
-use crate::serial_write;
+use crate::utils::serial_write;
 use alloc::format;
 
 /// USB Controller Types

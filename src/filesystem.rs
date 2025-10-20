@@ -29,6 +29,7 @@ use alloc::boxed::Box;
 use alloc::alloc::alloc;
 use alloc::string::ToString;
 use core::mem;
+use crate::utils::serial_write;
 
 /// Semantic metadata types
 pub type VectorEmbedding = [f32; 384]; // 384-dimensional embedding for semantic search
@@ -2807,10 +2808,10 @@ impl Filesystem {
     pub fn init() -> Option<Self> {
         // Try to use AHCI block device first, fall back to memory
         let block_device: &'static dyn BlockDevice = if let Some(ahci) = AhciBlockDevice::new() {
-            crate::serial_write("Using AHCI block device for filesystem\n");
+            serial_write("Using AHCI block device for filesystem\n");
             Box::leak(Box::new(ahci))
         } else {
-            crate::serial_write("Using memory block device for filesystem\n");
+            serial_write("Using memory block device for filesystem\n");
             // For now, create an in-memory filesystem
             // In a real implementation, this would read from disk
             Box::leak(Box::new(MemoryBlockDevice::new(1024))) // Small filesystem for demo
@@ -4012,11 +4013,11 @@ impl Filesystem {
     /// Print relationship graph statistics to stdout
     pub fn print_relationship_stats(&self) {
         let stats = self.relationship_graph.get_stats();
-        crate::serial_write("Relationship Graph Statistics:\n");
-        crate::serial_write(&alloc::format!("  Total nodes: {}\n", stats.total_nodes));
-        crate::serial_write(&alloc::format!("  Nodes with relationships: {}\n", stats.nodes_with_relationships));
-        crate::serial_write(&alloc::format!("  Total relationships: {}\n", stats.total_relationships));
-        crate::serial_write(&alloc::format!("  Max relationships per file: {}\n", stats.max_relationships_per_file));
+        serial_write("Relationship Graph Statistics:\n");
+        serial_write(&alloc::format!("  Total nodes: {}\n", stats.total_nodes));
+        serial_write(&alloc::format!("  Nodes with relationships: {}\n", stats.nodes_with_relationships));
+        serial_write(&alloc::format!("  Total relationships: {}\n", stats.total_relationships));
+        serial_write(&alloc::format!("  Max relationships per file: {}\n", stats.max_relationships_per_file));
     }
 
     /// Export relationship graph for federation
@@ -4341,7 +4342,7 @@ pub fn get_ml_model_stats() -> ModelRegistryStats {
 
 /// Test AI-FS functionality
 pub fn test_ai_filesystem() {
-    crate::serial_write("Testing AI Filesystem features...\n");
+    serial_write("Testing AI Filesystem features...\n");
 
     // Initialize ML models first
     initialize_default_models();
@@ -4349,7 +4350,7 @@ pub fn test_ai_filesystem() {
     // Create a test file
     let fs_ptr = get_fs();
     if fs_ptr.is_null() {
-        crate::serial_write("Filesystem not initialized\n");
+        serial_write("Filesystem not initialized\n");
         return;
     }
 
@@ -4367,78 +4368,78 @@ pub fn test_ai_filesystem() {
         for (filename, content) in &test_files {
             match (*fs_ptr).create_file(1, filename) {
                 Ok(inum) => {
-                    crate::serial_write("Created test file: ");
-                    crate::serial_write(filename);
-                    crate::serial_write(" (inode ");
-                    crate::serial_write(&inum.to_string());
-                    crate::serial_write(")\n");
+                    serial_write("Created test file: ");
+                    serial_write(filename);
+                    serial_write(" (inode ");
+                    serial_write(&inum.to_string());
+                    serial_write(")\n");
 
                     // Write content
                     if (*fs_ptr).write_file(inum, 0, content.as_bytes()).is_ok() {
                         // Analyze the content
                         match (*fs_ptr).analyze_content(inum) {
                             Ok(result) => {
-                                crate::serial_write("  AI analysis completed - Classification: ");
+                                serial_write("  AI analysis completed - Classification: ");
                                 match result.metadata.classification {
-                                    Classification::Public => crate::serial_write("Public"),
-                                    Classification::Internal => crate::serial_write("Internal"),
-                                    Classification::Confidential => crate::serial_write("Confidential"),
-                                    Classification::Restricted => crate::serial_write("Restricted"),
+                                    Classification::Public => serial_write("Public"),
+                                    Classification::Internal => serial_write("Internal"),
+                                    Classification::Confidential => serial_write("Confidential"),
+                                    Classification::Restricted => serial_write("Restricted"),
                                 }
-                                crate::serial_write(", Language: ");
-                                crate::serial_write(core::str::from_utf8(&result.metadata.language).unwrap_or("??"));
-                                crate::serial_write(", PII detected: ");
-                                crate::serial_write(if result.metadata.contains_pii { "Yes" } else { "No" });
-                                crate::serial_write(", Entities: ");
-                                crate::serial_write(&result.metadata.entity_count.to_string());
-                                crate::serial_write("\n");
+                                serial_write(", Language: ");
+                                serial_write(core::str::from_utf8(&result.metadata.language).unwrap_or("??"));
+                                serial_write(", PII detected: ");
+                                serial_write(if result.metadata.contains_pii { "Yes" } else { "No" });
+                                serial_write(", Entities: ");
+                                serial_write(&result.metadata.entity_count.to_string());
+                                serial_write("\n");
 
                                 created_inums.push(inum);
                             }
                             Err(e) => {
-                                crate::serial_write("  Analysis failed: ");
-                                crate::serial_write(&format!("{:?}", e));
-                                crate::serial_write("\n");
+                                serial_write("  Analysis failed: ");
+                                serial_write(&format!("{:?}", e));
+                                serial_write("\n");
                             }
                         }
                     }
                 }
                 Err(e) => {
-                    crate::serial_write("Failed to create ");
-                    crate::serial_write(filename);
-                    crate::serial_write(": ");
-                    crate::serial_write(&format!("{:?}", e));
-                    crate::serial_write("\n");
+                    serial_write("Failed to create ");
+                    serial_write(filename);
+                    serial_write(": ");
+                    serial_write(&format!("{:?}", e));
+                    serial_write("\n");
                 }
             }
         }
 
         // Test semantic search
-        crate::serial_write("\nTesting semantic search...\n");
+        serial_write("\nTesting semantic search...\n");
 
         // Search for technical content
         match semantic_search("machine learning algorithms") {
             Ok(results) => {
-                crate::serial_write("Search for 'machine learning algorithms' found ");
-                crate::serial_write(&results.len().to_string());
-                crate::serial_write(" results:\n");
+                serial_write("Search for 'machine learning algorithms' found ");
+                serial_write(&results.len().to_string());
+                serial_write(" results:\n");
                 for (inum, similarity) in results.iter().take(3) {
-                    crate::serial_write("  Inode ");
-                    crate::serial_write(&inum.to_string());
-                    crate::serial_write(" (similarity: ");
-                    crate::serial_write(&format!("{:.3}", similarity));
-                    crate::serial_write(")\n");
+                    serial_write("  Inode ");
+                    serial_write(&inum.to_string());
+                    serial_write(" (similarity: ");
+                    serial_write(&format!("{:.3}", similarity));
+                    serial_write(")\n");
                 }
             }
             Err(e) => {
-                crate::serial_write("Search failed: ");
-                crate::serial_write(&format!("{:?}", e));
-                crate::serial_write("\n");
+                serial_write("Search failed: ");
+                serial_write(&format!("{:?}", e));
+                serial_write("\n");
             }
         }
 
         // Test advanced search with filters
-        crate::serial_write("\nTesting advanced semantic search...\n");
+        serial_write("\nTesting advanced semantic search...\n");
         let filters = SearchFilters {
             file_types: Some(alloc::vec::Vec::from([1u8])), // Regular files
             classifications: Some(alloc::vec::Vec::from([1u8])), // Internal classification
@@ -4450,50 +4451,50 @@ pub fn test_ai_filesystem() {
 
         match advanced_semantic_search("technical software", &filters) {
             Ok(results) => {
-                crate::serial_write("Advanced search for 'technical software' found ");
-                crate::serial_write(&results.len().to_string());
-                crate::serial_write(" results:\n");
+                serial_write("Advanced search for 'technical software' found ");
+                serial_write(&results.len().to_string());
+                serial_write(" results:\n");
                 for result in results.iter().take(2) {
-                    crate::serial_write("  File ID ");
-                    crate::serial_write(&result.file_id.to_string());
-                    crate::serial_write(" (similarity: ");
-                    crate::serial_write(&format!("{:.3}", result.similarity_score));
-                    crate::serial_write(")\n");
-                    crate::serial_write("    Snippet: ");
-                    crate::serial_write(&result.snippet);
-                    crate::serial_write("\n");
+                    serial_write("  File ID ");
+                    serial_write(&result.file_id.to_string());
+                    serial_write(" (similarity: ");
+                    serial_write(&format!("{:.3}", result.similarity_score));
+                    serial_write(")\n");
+                    serial_write("    Snippet: ");
+                    serial_write(&result.snippet);
+                    serial_write("\n");
                 }
             }
             Err(e) => {
-                crate::serial_write("Advanced search failed: ");
-                crate::serial_write(&format!("{:?}", e));
-                crate::serial_write("\n");
+                serial_write("Advanced search failed: ");
+                serial_write(&format!("{:?}", e));
+                serial_write("\n");
             }
         }
 
         // Test model registry
-        crate::serial_write("\nTesting ML model registry...\n");
+        serial_write("\nTesting ML model registry...\n");
         let stats = get_ml_model_stats();
-        crate::serial_write("Model registry: ");
-        crate::serial_write(&stats.total_models.to_string());
-        crate::serial_write("/");
-        crate::serial_write(&stats.max_models.to_string());
-        crate::serial_write(" models loaded, ");
-        crate::serial_write(&stats.total_usage.to_string());
-        crate::serial_write(" total inferences\n");
+        serial_write("Model registry: ");
+        serial_write(&stats.total_models.to_string());
+        serial_write("/");
+        serial_write(&stats.max_models.to_string());
+        serial_write(" models loaded, ");
+        serial_write(&stats.total_usage.to_string());
+        serial_write(" total inferences\n");
 
         let models = list_ml_models();
         for model in models {
-            crate::serial_write("  Model ");
-            crate::serial_write(&model.id.0.to_string());
-            crate::serial_write(": ");
-            crate::serial_write(&model.name);
-            crate::serial_write(" (");
-            crate::serial_write(&model.usage_count.to_string());
-            crate::serial_write(" uses)\n");
+            serial_write("  Model ");
+            serial_write(&model.id.0.to_string());
+            serial_write(": ");
+            serial_write(&model.name);
+            serial_write(" (");
+            serial_write(&model.usage_count.to_string());
+            serial_write(" uses)\n");
         }
 
-        crate::serial_write("\nAI Filesystem test completed.\n");
+        serial_write("\nAI Filesystem test completed.\n");
     }
 }
 
@@ -4516,14 +4517,14 @@ fn initialize_default_models() {
         for model in models {
             match (*fs_ptr).register_model(model) {
                 Ok(model_id) => {
-                    crate::serial_write("Registered ML model: ");
-                    crate::serial_write(&model_id.0.to_string());
-                    crate::serial_write("\n");
+                    serial_write("Registered ML model: ");
+                    serial_write(&model_id.0.to_string());
+                    serial_write("\n");
                 }
                 Err(e) => {
-                    crate::serial_write("Failed to register model: ");
-                    crate::serial_write(&format!("{:?}", e));
-                    crate::serial_write("\n");
+                    serial_write("Failed to register model: ");
+                    serial_write(&format!("{:?}", e));
+                    serial_write("\n");
                 }
             }
         }

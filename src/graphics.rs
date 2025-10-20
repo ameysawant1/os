@@ -25,7 +25,7 @@ pub fn draw_window(win: &Window) {
 //
 // Provides basic framebuffer and graphics primitives for GUI support.
 
-use crate::serial_write;
+use serial_write;
 
 /// Graphics mode
 #[derive(Debug, Clone, Copy)]

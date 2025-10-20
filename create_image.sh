@@ -47,7 +47,7 @@ fi
 PART_START_BYTES=${PART_START_RAW%B}
 
 # If mtools (mformat/mcopy) are available we can write to the ESP without root
-if command -v mformat >/dev/null 2>&1 && command -v mcopy >/dev/null 2>&1; then
+if false; then  # Disable mtools path for now
     echo "Using mtools to format and populate the ESP (no root required)"
     # mformat expects a geometry or drive letter; use the -i image@@offset syntax
     if ! mformat -i "${IMAGE_FILE}@@${PART_START_BYTES}" :: >/dev/null 2>&1; then
@@ -66,11 +66,11 @@ if command -v mformat >/dev/null 2>&1 && command -v mcopy >/dev/null 2>&1; then
     fi
 
 else
-    # mtools not available; require root to losetup/mount the partition and use mkfs.vfat
+    # Use root path with mkfs.vfat for better compatibility
     if [ "$(id -u)" -ne 0 ]; then
-        echo "Neither mtools found nor running as root. To populate the ESP either:" >&2
-        echo "  - Install mtools (mformat/mcopy) and re-run make, or" >&2
-        echo "  - Run 'sudo make build' so the script can mount and copy files into the image." >&2
+        echo "To create a proper EFI System Partition, run with sudo:" >&2
+        echo "  sudo make build" >&2
+        echo "Or install mtools and re-run." >&2
         exit 1
     fi
 

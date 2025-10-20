@@ -6,7 +6,7 @@
 
 #![allow(dead_code)]
 
-use crate::serial_write;
+use crate::utils::serial_write;
 use x86_64::structures::idt::InterruptStackFrame;
 use crate::filesystem::{Filesystem, FileDescriptor, OpenFlags, InodeNum};
 

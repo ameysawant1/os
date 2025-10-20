@@ -3,7 +3,7 @@ all: build
 build:
 	cargo build --release --target x86_64-unknown-uefi
 	mkdir -p image
-	./create_image.sh
+	sudo ./create_image.sh
 
 clean:
 	cargo clean
@@ -11,17 +11,17 @@ clean:
 
 run: build
 	qemu-system-x86_64 -bios /usr/share/edk2/x64/OVMF.4m.fd \
-		-drive file=image/os.img,format=raw,if=virtio \
+		-drive file=image/os.img,format=raw,if=ide \
 		-serial mon:stdio \
 		-monitor none \
-		-boot order=c
+		-boot order=d
 
 run-text: build
 	qemu-system-x86_64 -bios /usr/share/edk2/x64/OVMF.4m.fd \
-		-drive file=image/os.img,format=raw,if=virtio \
+		-drive file=image/os.img,format=raw,if=ide \
 		-serial mon:stdio \
 		-monitor none \
 		-nographic \
-		-boot order=c
+		-boot menu=on
 
 .PHONY: build clean run

@@ -11,6 +11,7 @@ use crate::pci::{PciDevice, class_codes, network_subclasses};
 use alloc::vec::Vec;
 use alloc::format;
 use core::ptr;
+use crate::utils::serial_write;
 
 /// E1000 Register Offsets
 const E1000_CTRL: usize = 0x0000;        // Device Control
@@ -317,14 +318,14 @@ impl E1000Controller {
 
         if (icr & (1 << 7)) != 0 { // LSC
             // Link status change
-            crate::serial_write("Ethernet link status changed\n");
+            serial_write("Ethernet link status changed\n");
         }
     }
 
     /// Process received frame (placeholder)
     fn process_received_frame(&self, frame: &[u8]) {
         // TODO: Implement frame processing (ARP, IP, etc.)
-        crate::serial_write(&format!("Received frame of {} bytes\n", frame.len()));
+        serial_write(&format!("Received frame of {} bytes\n", frame.len()));
     }
 }
 
@@ -333,32 +334,32 @@ static mut E1000_CONTROLLER: Option<E1000Controller> = None;
 
 /// Initialize E1000 Ethernet driver
 pub fn init() {
-    crate::serial_write("Initializing Ethernet driver...\n");
+    serial_write("Initializing Ethernet driver...\n");
     // Find Ethernet controller via PCI
     if let Some(scanner) = crate::pci::get_scanner() {
-        crate::serial_write("PCI scanner available for Ethernet init\n");
+        serial_write("PCI scanner available for Ethernet init\n");
         for device in scanner.find_devices(class_codes::NETWORK, network_subclasses::ETHERNET) {
-            crate::serial_write(&format!("Found Ethernet device: {:04x}:{:04x}\n", device.vendor_id, device.device_id));
+            serial_write(&format!("Found Ethernet device: {:04x}:{:04x}\n", device.vendor_id, device.device_id));
             if let Ok(controller) = E1000Controller::new(device) {
                 unsafe {
                     E1000_CONTROLLER = Some(controller);
-                    crate::serial_write("E1000 Ethernet controller initialized\n");
+                    serial_write("E1000 Ethernet controller initialized\n");
 
                     if let Some(ctrl) = E1000_CONTROLLER.as_ref() {
                         let mac = ctrl.mac_address();
-                        crate::serial_write(&format!("MAC Address: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+                        serial_write(&format!("MAC Address: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
                             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]));
                     }
                 }
                 break; // Use first Ethernet controller found
             } else {
-                crate::serial_write("Failed to create E1000 controller\n");
+                serial_write("Failed to create E1000 controller\n");
             }
         }
     } else {
-        crate::serial_write("No PCI scanner available for Ethernet init\n");
+        serial_write("No PCI scanner available for Ethernet init\n");
     }
-    crate::serial_write("Ethernet driver initialization complete\n");
+    serial_write("Ethernet driver initialization complete\n");
 }
 
 /// Get E1000 controller instance
@@ -370,9 +371,9 @@ pub fn get_controller() -> Option<&'static mut E1000Controller> {
 pub fn test_ethernet() {
     if let Some(controller) = get_controller() {
         let mac = controller.mac_address();
-        crate::serial_write(&format!("Ethernet MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
+        serial_write(&format!("Ethernet MAC: {:02x}:{:02x}:{:02x}:{:02x}:{:02x}:{:02x}\n",
             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]));
     } else {
-        crate::serial_write("No Ethernet controller found\n");
+        serial_write("No Ethernet controller found\n");
     }
 }
