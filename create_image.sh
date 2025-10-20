@@ -35,7 +35,7 @@ ESP_END_MB=$((ESP_START_MB + ESP_SIZE_MB))
 parted -s "$IMAGE_FILE" mkpart ESP fat32 ${ESP_START_MB}MiB ${ESP_END_MB}MiB
 parted -s "$IMAGE_FILE" set 1 boot on
 
-# Create a loop device for the partition and format it as FAT32
+# Create a loop device for the partition
 LOOPDEV=$(losetup --show -fP "$IMAGE_FILE")
 if [ -z "$LOOPDEV" ]; then
     echo "Failed to setup loop device for $IMAGE_FILE" >&2
@@ -48,11 +48,23 @@ if [ ! -b "$ESP_DEV" ]; then
     ESP_DEV="${LOOPDEV}1"
 fi
 
-mkfs.vfat -F32 "$ESP_DEV" >/dev/null 2>&1 || {
-    echo "mkfs.vfat not available or failed. Cleaning up loop device." >&2
-    losetup -d "$LOOPDEV" || true
-    exit 1
-}
+# Try mkfs.vfat first, then mformat (from mtools), otherwise warn and continue
+if command -v mkfs.vfat >/dev/null 2>&1; then
+    mkfs.vfat -F32 "$ESP_DEV" >/dev/null 2>&1 || {
+        echo "mkfs.vfat failed. Cleaning up loop device." >&2
+        losetup -d "$LOOPDEV" || true
+        exit 1
+    }
+elif command -v mformat >/dev/null 2>&1 && command -v mcopy >/dev/null 2>&1; then
+    # mtools can operate directly on the image but needs an offset; use mformat on the loop device partition
+    mformat -i "$ESP_DEV" :: || {
+        echo "mformat failed. Cleaning up loop device." >&2
+        losetup -d "$LOOPDEV" || true
+        exit 1
+    }
+else
+    echo "Warning: neither mkfs.vfat nor mtools found. ESP created but not formatted." >&2
+fi
 
 # Mount the ESP and copy the EFI binary
 MOUNTDIR=$(mktemp -d)
