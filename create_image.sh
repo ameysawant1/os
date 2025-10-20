@@ -6,24 +6,20 @@ set -e
 
 IMAGE_SIZE_MB=64
 IMAGE_FILE="image/os.img"
-ESP_START=1MiB
-ESP_SIZE=32MiB
+# ESP parameters (in MiB)
+ESP_START_MB=1
+ESP_SIZE_MB=32
 
 echo "Creating OS disk image..."
 
 # Create image directory if it doesn't exist
 mkdir -p image
 
-# Create a raw disk image
-dd if=/dev/zero of="$IMAGE_FILE" bs=1M count="$IMAGE_SIZE_MB" status=none
-
-# Create GPT partition table and EFI System Partition
-parted -s "$IMAGE_FILE" mklabel gpt
-parted -s "$IMAGE_FILE" mkpart ESP fat32 $ESP_START $ESP_SIZE
-parted -s "$IMAGE_FILE" set 1 esp on
-
-# Create a raw disk image
-dd if=/dev/zero of="$IMAGE_FILE" bs=1M count="$IMAGE_SIZE_MB" status=none
+# Ensure ESP size fits inside image
+if [ "$ESP_SIZE_MB" -ge "$IMAGE_SIZE_MB" ]; then
+    echo "ESP size ($ESP_SIZE_MB MiB) must be smaller than total image size ($IMAGE_SIZE_MB MiB)" >&2
+    exit 1
+fi
 
 echo "Creating GPT and EFI System Partition (ESP) on $IMAGE_FILE"
 
@@ -34,8 +30,9 @@ parted -s "$IMAGE_FILE" mklabel gpt || {
     exit 0
 }
 
-# Create a single 100MiB EFI System Partition
-parted -s "$IMAGE_FILE" mkpart ESP fat32 1MiB 101MiB
+# Calculate end offset for parted in MiB
+ESP_END_MB=$((ESP_START_MB + ESP_SIZE_MB))
+parted -s "$IMAGE_FILE" mkpart ESP fat32 ${ESP_START_MB}MiB ${ESP_END_MB}MiB
 parted -s "$IMAGE_FILE" set 1 boot on
 
 # Create a loop device for the partition and format it as FAT32
