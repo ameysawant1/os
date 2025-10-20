@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Virtual Memory Management
 //!
 //! Implements proper paging using the x86_64 crate.

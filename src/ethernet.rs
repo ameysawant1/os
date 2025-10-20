@@ -4,6 +4,7 @@
 //! Foundation for implementing TCP/IP stack and network services.
 
 #![allow(static_mut_refs)]
+#![allow(dead_code)]
 
 use crate::pci::{PciDevice, class_codes, network_subclasses};
 #[cfg(feature = "alloc")]
@@ -13,46 +14,26 @@ use core::ptr;
 
 /// E1000 Register Offsets
 const E1000_CTRL: usize = 0x0000;        // Device Control
-const E1000_STATUS: usize = 0x0008;      // Device Status
-const E1000_EECD: usize = 0x0010;        // EEPROM/Flash Control
 const E1000_EERD: usize = 0x0014;        // EEPROM Read
-const E1000_CTRL_EXT: usize = 0x0018;    // Extended Device Control
-const E1000_MDIC: usize = 0x0020;        // MDI Control
-const E1000_FCAL: usize = 0x0028;        // Flow Control Address Low
-const E1000_FCAH: usize = 0x002C;        // Flow Control Address High
-const E1000_FCT: usize = 0x0030;         // Flow Control Type
-const E1000_VET: usize = 0x0038;         // VLAN Ether Type
-const E1000_ICR: usize = 0x00C0;         // Interrupt Cause Read
-const E1000_ICS: usize = 0x00C8;         // Interrupt Cause Set
-const E1000_IMS: usize = 0x00D0;         // Interrupt Mask Set/Read
 const E1000_IMC: usize = 0x00D8;         // Interrupt Mask Clear
 const E1000_RCTL: usize = 0x0100;        // Receive Control
-const E1000_FCTTV: usize = 0x0170;       // Flow Control Transmit Timer Value
-const E1000_TXCW: usize = 0x0178;        // Transmit Configuration Word
-const E1000_RXCW: usize = 0x0180;        // Receive Configuration Word
 const E1000_TCTL: usize = 0x0400;        // Transmit Control
 const E1000_TIPG: usize = 0x0410;        // Transmit IPG
-const E1000_AIFS: usize = 0x0458;        // Adaptive IFS Throttle
-const E1000_LEDCTL: usize = 0x0E00;      // LED Control
-const E1000_PBA: usize = 0x1000;         // Packet Buffer Allocation
 const E1000_RDBAL: usize = 0x2800;       // Receive Descriptor Base Address Low
 const E1000_RDBAH: usize = 0x2804;       // Receive Descriptor Base Address High
 const E1000_RDLEN: usize = 0x2808;       // Receive Descriptor Length
 const E1000_RDH: usize = 0x2810;         // Receive Descriptor Head
 const E1000_RDT: usize = 0x2818;         // Receive Descriptor Tail
-const E1000_RDTR: usize = 0x2820;        // Receive Delay Timer
-const E1000_RADV: usize = 0x282C;        // Receive Interrupt Absolute Delay Timer
 const E1000_TDBAL: usize = 0x3800;       // Transmit Descriptor Base Address Low
 const E1000_TDBAH: usize = 0x3804;       // Transmit Descriptor Base Address High
 const E1000_TDLEN: usize = 0x3808;       // Transmit Descriptor Length
 const E1000_TDH: usize = 0x3810;         // Transmit Descriptor Head
 const E1000_TDT: usize = 0x3818;         // Transmit Descriptor Tail
-const E1000_TIDV: usize = 0x3820;        // Transmit Interrupt Delay Value
-const E1000_TXDCTL: usize = 0x3828;      // Transmit Descriptor Control
-const E1000_TADV: usize = 0x382C;        // Transmit Absolute Interrupt Delay Value
-const E1000_MTA: usize = 0x5200;         // Multicast Table Array
+const E1000_ICR: usize = 0x00C0;         // Interrupt Cause Read
+const E1000_IMS: usize = 0x00D0;         // Interrupt Mask Set/Read
 const E1000_RAL: usize = 0x5400;         // Receive Address Low
 const E1000_RAH: usize = 0x5404;         // Receive Address High
+// Removed unused constants: E1000_STATUS, E1000_EECD, E1000_CTRL_EXT, E1000_MDIC, E1000_FCAL, E1000_FCAH, E1000_FCT, E1000_VET, E1000_ICS, E1000_FCTTV, E1000_TXCW, E1000_RXCW, E1000_AIFS, E1000_LEDCTL, E1000_PBA, E1000_RDTR, E1000_RADV, E1000_TIDV, E1000_TXDCTL, E1000_TADV, E1000_MTA
 
 /// Receive Descriptor
 #[repr(C)]
@@ -142,45 +123,43 @@ impl E1000Controller {
 
     /// Initialize the E1000 controller
     fn initialize(&mut self) -> Result<(), &'static str> {
-        unsafe {
-            // Reset the device
-            self.write_reg(E1000_CTRL, self.read_reg(E1000_CTRL) | (1 << 26));
-            // Wait for reset to complete
-            while (self.read_reg(E1000_CTRL) & (1 << 26)) != 0 {}
+        // Reset the device
+        self.write_reg(E1000_CTRL, self.read_reg(E1000_CTRL) | (1 << 26));
+        // Wait for reset to complete
+        while (self.read_reg(E1000_CTRL) & (1 << 26)) != 0 {}
 
-            // Read MAC address from EEPROM
-            self.read_mac_address()?;
+        // Read MAC address from EEPROM
+        self.read_mac_address()?;
 
-            // Disable interrupts
-            self.write_reg(E1000_IMC, 0xFFFFFFFF);
+        // Disable interrupts
+        self.write_reg(E1000_IMC, 0xFFFFFFFF);
 
-            // Setup receive ring
-            self.setup_receive_ring()?;
+        // Setup receive ring
+        self.setup_receive_ring()?;
 
-            // Setup transmit ring
-            self.setup_transmit_ring()?;
+        // Setup transmit ring
+        self.setup_transmit_ring()?;
 
-            // Configure receive control
-            self.write_reg(E1000_RCTL, (1 << 1) | (1 << 3) | (1 << 4)); // EN | SBP | UPE
+        // Configure receive control
+        self.write_reg(E1000_RCTL, (1 << 1) | (1 << 3) | (1 << 4)); // EN | SBP | UPE
 
-            // Configure transmit control
-            self.write_reg(E1000_TCTL, (1 << 1) | (1 << 3)); // EN | PSP
-            self.write_reg(E1000_TIPG, 0x0060200A); // IPGT=10, IPGR1=8, IPGR2=6
+        // Configure transmit control
+        self.write_reg(E1000_TCTL, (1 << 1) | (1 << 3)); // EN | PSP
+        self.write_reg(E1000_TIPG, 0x0060200A); // IPGT=10, IPGR1=8, IPGR2=6
 
-            // Set MAC address
-            self.write_reg(E1000_RAL, (self.mac_addr[0] as u32) |
-                          ((self.mac_addr[1] as u32) << 8) |
-                          ((self.mac_addr[2] as u32) << 16) |
-                          ((self.mac_addr[3] as u32) << 24));
-            self.write_reg(E1000_RAH, (self.mac_addr[4] as u32) |
-                          ((self.mac_addr[5] as u32) << 8) | (1 << 31)); // AV = 1
+        // Set MAC address
+        self.write_reg(E1000_RAL, (self.mac_addr[0] as u32) |
+                      ((self.mac_addr[1] as u32) << 8) |
+                      ((self.mac_addr[2] as u32) << 16) |
+                      ((self.mac_addr[3] as u32) << 24));
+        self.write_reg(E1000_RAH, (self.mac_addr[4] as u32) |
+                      ((self.mac_addr[5] as u32) << 8) | (1 << 31)); // AV = 1
 
-            // Enable interrupts
-            self.write_reg(E1000_IMS, (1 << 7) | (1 << 6) | (1 << 4)); // LSC | RXSEQ | RXDMT0
+        // Enable interrupts
+        self.write_reg(E1000_IMS, (1 << 7) | (1 << 6) | (1 << 4)); // LSC | RXSEQ | RXDMT0
 
-            // Start device
-            self.write_reg(E1000_CTRL, self.read_reg(E1000_CTRL) | (1 << 6)); // SLU
-        }
+        // Start device
+        self.write_reg(E1000_CTRL, self.read_reg(E1000_CTRL) | (1 << 6)); // SLU
 
         Ok(())
     }
@@ -198,19 +177,17 @@ impl E1000Controller {
 
     /// Read EEPROM word
     fn read_eeprom(&self, address: u32) -> Result<u16, &'static str> {
-        unsafe {
-            // Request EEPROM read
-            self.write_reg(E1000_EERD, (address << 8) | 1);
+        // Request EEPROM read
+        self.write_reg(E1000_EERD, (address << 8) | 1);
 
-            // Wait for completion
-            let mut timeout = 10000;
-            while timeout > 0 {
-                let eerd = self.read_reg(E1000_EERD);
-                if (eerd & (1 << 4)) != 0 {
-                    return Ok((eerd >> 16) as u16);
-                }
-                timeout -= 1;
+        // Wait for completion
+        let mut timeout = 10000;
+        while timeout > 0 {
+            let eerd = self.read_reg(E1000_EERD);
+            if (eerd & (1 << 4)) != 0 {
+                return Ok((eerd >> 16) as u16);
             }
+            timeout -= 1;
         }
         Err("EEPROM read timeout")
     }
@@ -223,18 +200,16 @@ impl E1000Controller {
             self.rx_ring[i].status = 0;
         }
 
-        unsafe {
-            // Set ring base address
-            self.write_reg(E1000_RDBAL, self.rx_ring.as_ptr() as u32);
-            self.write_reg(E1000_RDBAH, (self.rx_ring.as_ptr() as u64 >> 32) as u32);
+        // Set ring base address
+        self.write_reg(E1000_RDBAL, self.rx_ring.as_ptr() as u32);
+        self.write_reg(E1000_RDBAH, (self.rx_ring.as_ptr() as u64 >> 32) as u32);
 
-            // Set ring length
-            self.write_reg(E1000_RDLEN, (RX_RING_SIZE as u32) * 16);
+        // Set ring length
+        self.write_reg(E1000_RDLEN, (RX_RING_SIZE as u32) * 16);
 
-            // Set head and tail
-            self.write_reg(E1000_RDH, 0);
-            self.write_reg(E1000_RDT, (RX_RING_SIZE - 1) as u32);
-        }
+        // Set head and tail
+        self.write_reg(E1000_RDH, 0);
+        self.write_reg(E1000_RDT, (RX_RING_SIZE - 1) as u32);
 
         Ok(())
     }
@@ -248,18 +223,16 @@ impl E1000Controller {
             self.tx_ring[i].cmd = 0;
         }
 
-        unsafe {
-            // Set ring base address
-            self.write_reg(E1000_TDBAL, self.tx_ring.as_ptr() as u32);
-            self.write_reg(E1000_TDBAH, (self.tx_ring.as_ptr() as u64 >> 32) as u32);
+        // Set ring base address
+        self.write_reg(E1000_TDBAL, self.tx_ring.as_ptr() as u32);
+        self.write_reg(E1000_TDBAH, (self.tx_ring.as_ptr() as u64 >> 32) as u32);
 
-            // Set ring length
-            self.write_reg(E1000_TDLEN, (TX_RING_SIZE as u32) * 16);
+        // Set ring length
+        self.write_reg(E1000_TDLEN, (TX_RING_SIZE as u32) * 16);
 
-            // Set head and tail
-            self.write_reg(E1000_TDH, 0);
-            self.write_reg(E1000_TDT, 0);
-        }
+        // Set head and tail
+        self.write_reg(E1000_TDH, 0);
+        self.write_reg(E1000_TDT, 0);
 
         Ok(())
     }
@@ -296,9 +269,7 @@ impl E1000Controller {
 
         // Update tail pointer
         self.tx_cur = (self.tx_cur + 1) % TX_RING_SIZE;
-        unsafe {
-            self.write_reg(E1000_TDT, self.tx_cur as u32);
-        }
+        self.write_reg(E1000_TDT, self.tx_cur as u32);
 
         Ok(())
     }
@@ -315,9 +286,7 @@ impl E1000Controller {
             self.rx_ring[self.rx_cur].status = 0;
             self.rx_cur = (self.rx_cur + 1) % RX_RING_SIZE;
 
-            unsafe {
-                self.write_reg(E1000_RDT, ((self.rx_cur + RX_RING_SIZE - 1) % RX_RING_SIZE) as u32);
-            }
+            self.write_reg(E1000_RDT, ((self.rx_cur + RX_RING_SIZE - 1) % RX_RING_SIZE) as u32);
 
             Some(data)
         } else {

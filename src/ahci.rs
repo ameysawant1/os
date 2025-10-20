@@ -4,6 +4,7 @@
 //! Enables reading/writing to SATA drives for filesystem expansion.
 
 #![allow(static_mut_refs)]
+#![allow(dead_code)]
 
 use crate::pci::{PciDevice, class_codes, storage_subclasses};
 use core::ptr;

@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Process Scheduler
 //!
 //! Implements round-robin scheduling with context switching.
@@ -101,10 +103,10 @@ impl Scheduler {
     pub fn schedule(&mut self) -> Option<&mut ProcessControlBlock> {
         self.time_slice_counter += 1;
 
-        let mut from_process = 0;
-        let mut to_process = 0;
-        let mut from_thread = 0;
-        let mut to_thread = 0;
+        let mut _from_process = 0;
+        let mut _to_process = 0;
+        let mut _from_thread = 0;
+        let mut _to_thread = 0;
         let mut reason = crate::execution_journal::ContextSwitchReason::TimeSliceExpired;
 
         // Check if current process needs to be preempted
@@ -120,8 +122,8 @@ impl Scheduler {
             let current_pcb = &mut self.processes[idx];
             current_pcb.time_slice = current_pcb.time_slice.saturating_sub(1);
             current_pcb.total_runtime += 1;
-            from_process = current_pcb.process.pid;
-            from_thread = 0; // Single-threaded for now
+            _from_process = current_pcb.process.pid;
+            _from_thread = 0; // Single-threaded for now
             return Some(current_pcb);
         } else {
             // Current process expired or blocked
@@ -135,8 +137,8 @@ impl Scheduler {
                     reason = crate::execution_journal::ContextSwitchReason::Yield;
                 }
                 current_pcb.state = SchedulerState::Ready;
-                from_process = current_pcb.process.pid;
-                from_thread = 0;
+                _from_process = current_pcb.process.pid;
+                _from_thread = 0;
             }
             self.current_process = None;
         }
@@ -144,8 +146,8 @@ impl Scheduler {
         // Find next ready process
         for (i, pcb) in self.processes.iter_mut().enumerate() {
             if pcb.state == SchedulerState::Ready {
-                to_process = pcb.process.pid;
-                to_thread = 0; // Single-threaded for now
+                _to_process = pcb.process.pid;
+                _to_thread = 0; // Single-threaded for now
 
                 pcb.state = SchedulerState::Running;
                 pcb.time_slice = DEFAULT_TIME_SLICE;
@@ -153,7 +155,7 @@ impl Scheduler {
 
                 // Record context switch in execution journal
                 if let Some(journal) = crate::execution_journal::get_journal() {
-                    let _ = journal.record_context_switch(from_process, to_process, from_thread, to_thread, reason);
+                    let _ = journal.record_context_switch(_from_process, _to_process, _from_thread, _to_thread, reason);
                 }
 
                 return Some(pcb);
@@ -161,10 +163,10 @@ impl Scheduler {
         }
 
         // No ready processes - record that we're switching to idle
-        if from_process != 0 {
+        if _from_process != 0 {
             // Record switch to idle
             if let Some(journal) = crate::execution_journal::get_journal() {
-                let _ = journal.record_context_switch(from_process, 0, from_thread, 0, crate::execution_journal::ContextSwitchReason::Terminated);
+                let _ = journal.record_context_switch(_from_process, 0, _from_thread, 0, crate::execution_journal::ContextSwitchReason::Terminated);
             }
         }
 

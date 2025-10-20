@@ -3,6 +3,7 @@
 //! Foundation for USB keyboard, mouse, and storage support.
 
 #![allow(static_mut_refs)]
+#![allow(dead_code)]
 
 use crate::pci::{PciDevice, class_codes};
 use crate::serial_write;

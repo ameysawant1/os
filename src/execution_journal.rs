@@ -11,6 +11,9 @@
 extern crate alloc;
 
 use crate::filesystem::{Filesystem, FileDescriptor, OpenFlags, InodeNum};
+use crate::filesystem::{get_fs};
+use core::ptr;
+
 #[cfg(feature = "alloc")]
 use alloc::vec::Vec;
 #[cfg(feature = "alloc")]
@@ -109,6 +112,8 @@ pub struct ExecutionJournal {
     replay_entries: Vec<JournalEntry>,
     replay_position: usize,
     snapshot_manager: SnapshotManager,
+    security_manager: Option<&'static mut crate::security::SecurityManager>,
+    entries: Vec<JournalEntry>, // Added field to store journal entries
 }
 
 /// Journal entry union for replay
@@ -237,8 +242,8 @@ pub struct SnapshotInfo {
 
 impl ExecutionJournal {
     /// Initialize execution journal
-    pub fn new() -> Self {
-        ExecutionJournal {
+    pub fn new(security_manager: Option<&'static mut crate::security::SecurityManager>) -> Self {
+        let mut journal = ExecutionJournal {
             filesystem: core::ptr::null_mut(),
             current_journal_fd: None,
             sequence_counter: 0,
@@ -246,12 +251,24 @@ impl ExecutionJournal {
             replay_entries: Vec::new(),
             replay_position: 0,
             snapshot_manager: SnapshotManager::new(),
-        }
+            security_manager: security_manager,
+            entries: Vec::new(), // Initialize entries vector
+        };
+
+        // Try to load existing journal from disk
+        let _ = journal.load_from_disk(); // Ignore errors, start fresh if needed
+
+        journal
     }
 
     /// Set filesystem for journal storage
     pub fn set_filesystem(&mut self, fs: *mut Filesystem) {
         self.filesystem = fs;
+    }
+
+    /// Set security manager
+    pub fn set_security_manager(&mut self, sm: &'static mut crate::security::SecurityManager) {
+        self.security_manager = Some(sm);
     }
 
     /// Start journaling to a new file
@@ -452,6 +469,126 @@ impl ExecutionJournal {
         self.replay_mode
     }
 
+    /// Save journal entries to persistent storage
+    pub fn save_to_disk(&mut self) -> Result<(), &'static str> {
+        let fs_ptr = get_fs();
+        if fs_ptr.is_null() {
+            return Err("Filesystem not initialized");
+        }
+        let fs = unsafe { &mut *fs_ptr };
+
+        // Create/open journal file
+        let flags = OpenFlags {
+            read: true,
+            write: true,
+            create: true,
+            truncate: true,
+        };
+
+        let fd = match fs.open("/execution_journal.bin", flags) {
+            Ok(fd) => fd,
+            Err(_) => return Err("Failed to open journal file"),
+        };
+
+        // Serialize and write journal entries
+        let mut buffer = [0u8; 4096];
+        let mut offset = 0;
+
+        for entry in &self.entries {
+            if offset + core::mem::size_of::<JournalEntry>() > buffer.len() {
+                // Write current buffer
+                if fs.write(fd, &buffer[..offset]).is_err() {
+                    return Err("Failed to write journal data");
+                }
+                offset = 0;
+            }
+
+            // Serialize entry to buffer
+            unsafe {
+                let entry_ptr = entry as *const JournalEntry as *const u8;
+                let entry_size = core::mem::size_of::<JournalEntry>();
+                ptr::copy_nonoverlapping(
+                    entry_ptr,
+                    buffer.as_mut_ptr().add(offset),
+                    entry_size
+                );
+                offset += entry_size;
+            }
+        }
+
+        // Write remaining data
+        if offset > 0 {
+            if fs.write(fd, &buffer[..offset]).is_err() {
+                return Err("Failed to write journal data");
+            }
+        }
+
+        // Close file
+        let _ = fs.close(fd);
+
+        Ok(())
+    }
+
+    /// Load journal entries from persistent storage
+    pub fn load_from_disk(&mut self) -> Result<(), &'static str> {
+        let fs_ptr = get_fs();
+        if fs_ptr.is_null() {
+            return Err("Filesystem not initialized");
+        }
+        let fs = unsafe { &mut *fs_ptr };
+
+        // Open journal file for reading
+        let flags = OpenFlags {
+            read: true,
+            write: false,
+            create: false,
+            truncate: false,
+        };
+
+        let fd = match fs.open("/execution_journal.bin", flags) {
+            Ok(fd) => fd,
+            Err(_) => return Ok(()), // File doesn't exist, start fresh
+        };
+
+        // Read and deserialize journal entries
+        let mut buffer = [0u8; 4096];
+        let entry_size = core::mem::size_of::<JournalEntry>();
+
+        loop {
+            match fs.read(fd, &mut buffer) {
+                Ok(bytes_read) => {
+                    if bytes_read == 0 {
+                        break; // EOF
+                    }
+
+                    let mut offset = 0;
+                    while offset + entry_size <= bytes_read {
+                        // Deserialize entry from buffer
+                        let entry: JournalEntry = unsafe {
+                            ptr::read(buffer.as_ptr().add(offset) as *const JournalEntry)
+                        };
+
+                        // Add to journal (skip validation for loaded entries)
+                        if self.entries.len() < self.entries.capacity() {
+                            self.entries.push(entry);
+                        } else {
+                            // Journal full, stop loading
+                            break;
+                        }
+
+                        offset += entry_size;
+                    }
+                }
+                Err(_) => return Err("Failed to read journal data"),
+            }
+        }
+
+        // Close file
+        let _ = fs.close(fd);
+
+        Ok(())
+    }
+
     // Private methods
 
     fn record_entry<T: Sized>(&mut self, entry_type: JournalEntryType, entry: &T) -> Result<(), &'static str> {
@@ -586,10 +723,12 @@ impl SnapshotManager {
 /// Global execution journal instance
 static mut EXECUTION_JOURNAL: Option<ExecutionJournal> = None;
 
-/// Initialize global execution journal
+/// Initialize execution journal
 pub fn init() {
     unsafe {
-        EXECUTION_JOURNAL = Some(ExecutionJournal::new());
+        // Get security manager for initialization
+        let security_manager = crate::security::get_security_manager();
+        EXECUTION_JOURNAL = Some(ExecutionJournal::new(security_manager));
     }
 }
 

@@ -5,6 +5,7 @@
 //! - I/O APIC for external device interrupts
 
 #![allow(static_mut_refs)]
+#![allow(dead_code)]
 //! - MSI/MSI-X support for modern PCI devices
 //! - SMP (Symmetric Multi-Processing) support
 

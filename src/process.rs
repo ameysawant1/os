@@ -3,6 +3,8 @@
 //! Provides basic process creation, ELF binary loading, and execution.
 //! Currently supports simple userland processes with identity-mapped memory.
 
+#![allow(dead_code)]
+
 use crate::syscall::Syscall;
 use core::mem;
 

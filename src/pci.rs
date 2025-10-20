@@ -4,6 +4,7 @@
 //! Foundation for storage, network, and other PCI device drivers.
 
 #![allow(static_mut_refs)]
+#![allow(dead_code)]
 
 use core::ptr;
 use alloc::format;
@@ -287,30 +288,20 @@ pub mod class_codes {
     pub const MEMORY: u8 = 0x05;
     pub const BRIDGE: u8 = 0x06;
     pub const COMMUNICATION: u8 = 0x07;
-    pub const SYSTEM: u8 = 0x08;
-    pub const INPUT: u8 = 0x09;
-    pub const DOCKING: u8 = 0x0A;
-    pub const PROCESSOR: u8 = 0x0B;
-    pub const SERIAL: u8 = 0x0C;
-    pub const SERIAL_BUS: u8 = 0x0C;
-    pub const WIRELESS: u8 = 0x0D;
-    pub const INTELLIGENT_IO: u8 = 0x0E;
-    pub const SATELLITE: u8 = 0x0F;
-    pub const ENCRYPTION: u8 = 0x10;
-    pub const SIGNAL_PROCESSING: u8 = 0x11;
-    pub const PROCESSING_ACCELERATOR: u8 = 0x12;
-    pub const NON_ESSENTIAL: u8 = 0x13;
+    pub const SERIAL_BUS: u8 = 0x0C; // Added to support USB subclass detection
+    // Removed unused class codes: SYSTEM, INPUT, DOCKING, PROCESSOR, SERIAL, WIRELESS, INTELLIGENT_IO, SATELLITE, ENCRYPTION, SIGNAL_PROCESSING, PROCESSING_ACCELERATOR, NON_ESSENTIAL
 }
 
 /// PCI Subclass Codes for Storage
 pub mod storage_subclasses {
+    // Subclass codes for Storage class (kept minimal)
     pub const SCSI: u8 = 0x00;
     pub const IDE: u8 = 0x01;
     pub const FLOPPY: u8 = 0x02;
     pub const IPI: u8 = 0x03;
     pub const RAID: u8 = 0x04;
     pub const ATA: u8 = 0x05;
-    pub const SATA: u8 = 0x06;
+    pub const SATA: u8 = 0x06; // Needed by AHCI driver
     pub const SAS: u8 = 0x07;
     pub const NVME: u8 = 0x08;
     pub const UFS: u8 = 0x09;
@@ -319,14 +310,7 @@ pub mod storage_subclasses {
 /// PCI Subclass Codes for Network
 pub mod network_subclasses {
     pub const ETHERNET: u8 = 0x00;
-    pub const TOKEN_RING: u8 = 0x01;
-    pub const FDDI: u8 = 0x02;
-    pub const ATM: u8 = 0x03;
-    pub const ISDN: u8 = 0x04;
-    pub const WORLD_FLIP: u8 = 0x05;
-    pub const PICMG_2_14: u8 = 0x06;
-    pub const INFINIBAND: u8 = 0x07;
-    pub const FABRIC: u8 = 0x08;
+    // Removed unused network subclasses: TOKEN_RING, FDDI, ATM, ISDN, WORLD_FLIP, PICMG_2_14, INFINIBAND, FABRIC
 }
 
 /// Global PCI scanner instance

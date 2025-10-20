@@ -4,6 +4,7 @@
 //! Includes PhysAddr and VirtAddr types for type safety.
 
 #![allow(static_mut_refs)]
+#![allow(dead_code)]
 
 use core::ops::{Add, Sub};
 use core::mem::MaybeUninit;

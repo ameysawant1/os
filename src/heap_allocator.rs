@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 //! Advanced Memory Allocator
 //!
 //! Uses linked_list_allocator for proper heap management with allocation/deallocation.

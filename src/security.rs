@@ -9,6 +9,8 @@
 //! - Kill-switch for AI autonomy
 //! - PII redaction for off-device exports
 
+#![allow(dead_code)]
+
 #[cfg(feature = "alloc")]
 extern crate alloc;
 
@@ -36,6 +38,7 @@ pub enum OperationType {
     DataExport,
     SecurityPolicyChange,
     AutonomyControl,
+    FileAccess,
 }
 
 /// Audit log entry
@@ -190,6 +193,9 @@ impl SecurityManager {
             }
             OperationType::AutonomyControl => {
                 Ok(true) // Always allow autonomy controls
+            }
+            OperationType::FileAccess => {
+                Ok(true) // Always allow file access (controlled by filesystem permissions)
             }
         }
     }

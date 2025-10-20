@@ -10,7 +10,7 @@ uart_16550 = "0.4"
 spin = "0.10"
 pic8259 = "0.11"
 linked_list_allocator = "0.10"
-aes-gcm = { version = "0.10", default-features = false, features = ["aes"] }
+# aes-gcm = { version = "0.10", default-features = false, features = ["aes"] }
 rand = { version = "0.8", default-features = false, features = ["small_rng"] }
 generic-array = "0.14"
 
