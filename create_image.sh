@@ -35,31 +35,32 @@ ESP_END_MB=$((ESP_START_MB + ESP_SIZE_MB))
 parted -s "$IMAGE_FILE" mkpart ESP fat32 ${ESP_START_MB}MiB ${ESP_END_MB}MiB
 parted -s "$IMAGE_FILE" set 1 boot on
 
-# Create a loop device for the partition
-LOOPDEV=$(losetup --show -fP "$IMAGE_FILE")
-if [ -z "$LOOPDEV" ]; then
-    echo "Failed to setup loop device for $IMAGE_FILE" >&2
+# Determine partition start (bytes) so we can attach just the partition via offset
+PART_START_RAW=$(parted -s "$IMAGE_FILE" unit B print | awk '/^ 1/ {print $2; exit}')
+if [ -z "$PART_START_RAW" ]; then
+    echo "Failed to determine partition start offset" >&2
     exit 1
 fi
+PART_START_BYTES=${PART_START_RAW%B}
 
-ESP_DEV="${LOOPDEV}p1"
-if [ ! -b "$ESP_DEV" ]; then
-    # Some systems expose partitions as ${LOOPDEV}p1, others as ${LOOPDEV}1
-    ESP_DEV="${LOOPDEV}1"
+# Attach partition using losetup with offset
+LOOP_PART=$(losetup --show -o "$PART_START_BYTES" -f "$IMAGE_FILE")
+if [ -z "$LOOP_PART" ]; then
+    echo "Failed to setup loop device for partition" >&2
+    exit 1
 fi
 
 # Try mkfs.vfat first, then mformat (from mtools), otherwise warn and continue
 if command -v mkfs.vfat >/dev/null 2>&1; then
-    mkfs.vfat -F32 "$ESP_DEV" >/dev/null 2>&1 || {
+    mkfs.vfat -F32 "$LOOP_PART" >/dev/null 2>&1 || {
         echo "mkfs.vfat failed. Cleaning up loop device." >&2
-        losetup -d "$LOOPDEV" || true
+        losetup -d "$LOOP_PART" || true
         exit 1
     }
 elif command -v mformat >/dev/null 2>&1 && command -v mcopy >/dev/null 2>&1; then
-    # mtools can operate directly on the image but needs an offset; use mformat on the loop device partition
-    mformat -i "$ESP_DEV" :: || {
+    mformat -i "$LOOP_PART" :: || {
         echo "mformat failed. Cleaning up loop device." >&2
-        losetup -d "$LOOPDEV" || true
+        losetup -d "$LOOP_PART" || true
         exit 1
     }
 else
