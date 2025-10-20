@@ -15,6 +15,9 @@ echo "Creating OS disk image..."
 # Create image directory if it doesn't exist
 mkdir -p image
 
+# Create a raw disk image
+dd if=/dev/zero of="$IMAGE_FILE" bs=1M count="$IMAGE_SIZE_MB" status=none
+
 # Ensure ESP size fits inside image
 if [ "$ESP_SIZE_MB" -ge "$IMAGE_SIZE_MB" ]; then
     echo "ESP size ($ESP_SIZE_MB MiB) must be smaller than total image size ($IMAGE_SIZE_MB MiB)" >&2
@@ -108,13 +111,3 @@ fi
 echo "Disk image created: $IMAGE_FILE (with EFI System Partition)"
 
 echo "Image creation complete."
-if [ -f "target/x86_64-unknown-uefi/release/os.efi" ]; then
-    mmd -i "$IMAGE_FILE"@@$ESP_OFFSET ::EFI
-    mmd -i "$IMAGE_FILE"@@$ESP_OFFSET ::EFI/BOOT
-    mcopy -i "$IMAGE_FILE"@@$ESP_OFFSET target/x86_64-unknown-uefi/release/os.efi ::EFI/BOOT/BOOTX64.EFI
-    echo "EFI binary copied to ESP"
-else
-    echo "Warning: Kernel binary not found at target/x86_64-unknown-uefi/release/os.efi"
-fi
-
-echo "Image creation complete: $IMAGE_FILE"
